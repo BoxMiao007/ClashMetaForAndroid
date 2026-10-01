@@ -24,4 +24,20 @@ interface ISyncManager {
      * 删除确认场景传空列表即可。
      */
     suspend fun resolve(choices: List<SyncChoice>): SyncOutcome
+
+    /**
+     * 列出云端同步目录的全部备份包,时间倒序(文件名内时间戳优先,回退服务器 last_modified)。
+     * 失败抛异常,由调用方提示。
+     */
+    suspend fun listCloudBackups(): List<CloudBackupInfo>
+
+    /**
+     * 用指定的云端备份包整体替换本机订阅:下载解码 → 清空现有 imported 订阅 →
+     * 按包内订阅条目离线导入(含 providers)→ 快照重建为「本机 = 该包」的基线。
+     * 恢复不是同步,不经过合并计划;与同步共用同一 busy 互斥,并发以「正在进行中」失败答复。
+     */
+    suspend fun restoreBackup(name: String): SyncOutcome
+
+    /** 删除单个云端备份包,不影响其他包;失败抛异常,由调用方提示。 */
+    suspend fun deleteCloudBackup(name: String)
 }

@@ -33,7 +33,7 @@ class SyncSettingsDesign(
     private val store: SyncStore,
 ) : Design<SyncSettingsDesign.Request>(context) {
     enum class Request {
-        StartSync, AutoSyncChanged, CustomInterval
+        StartSync, AutoSyncChanged, CustomInterval, OpenCloudHistory
     }
 
     private val binding = DesignSettingsCommonBinding
@@ -100,10 +100,21 @@ class SyncSettingsDesign(
                 title = R.string.sync_now,
                 icon = R.drawable.ic_baseline_sync,
             ) {
-                requests.trySend(Request.StartSync)
+                clicked {
+                    requests.trySend(Request.StartSync)
+                }
             }
 
             resultTips = tips(text = R.string.sync_result_empty)
+
+            clickable(
+                title = R.string.cloud_backup_history,
+                icon = R.drawable.ic_baseline_view_list,
+            ) {
+                clicked {
+                    requests.trySend(Request.OpenCloudHistory)
+                }
+            }
 
             category(R.string.sync_auto)
 

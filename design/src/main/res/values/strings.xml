@@ -407,4 +407,17 @@
     <string name="sync_interval_12h">12 hours</string>
     <string name="sync_interval_24h">24 hours</string>
     <string name="sync_interval_custom">Custom…</string>
+    <string name="cloud_backup_history">Cloud Backup History</string>
+    <string name="cloud_backup_empty">No backups in the cloud</string>
+    <string name="cloud_backup_platform_cmfa">CMFA</string>
+    <string name="cloud_backup_platform_verge">Clash Verge (%1$s)</string>
+    <string name="cloud_backup_restore_action">Restore</string>
+    <string name="cloud_backup_delete_action">Delete</string>
+    <string name="cloud_backup_restore_confirm_title">Restore Backup</string>
+    <string name="cloud_backup_restore_confirm_message">The selected backup will replace ALL subscriptions on this phone. This cannot be undone.\n\nBackup: %1$s\n\nContinue?</string>
+    <string name="cloud_backup_restore_done">Restore completed</string>
+    <string name="cloud_backup_restore_done_names">Restored: %1$s</string>
+    <string name="cloud_backup_delete_confirm_title">Delete Backup</string>
+    <string name="cloud_backup_delete_confirm_message">Delete %1$s from the cloud? Other backups are not affected.</string>
+    <string name="cloud_backup_deleted">Deleted</string>
 </resources>

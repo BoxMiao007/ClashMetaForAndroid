@@ -37,6 +37,9 @@ class SyncSettingsActivity : BaseActivity<SyncSettingsDesign>() {
                         SyncSettingsDesign.Request.CustomInterval ->
                             if (design.requestCustomInterval())
                                 SyncReceiver.schedule(this@SyncSettingsActivity)
+
+                        SyncSettingsDesign.Request.OpenCloudHistory ->
+                            startActivity(CloudBackupHistoryActivity::class.intent)
                     }
                 }
             }

@@ -9,6 +9,30 @@ import kotlinx.serialization.Serializable
 const val SYNC_KEY_KIND_URL = 0
 const val SYNC_KEY_KIND_NAME = 1
 
+/** 云端备份包条目(云端历史列表的一行,数据来自 service/webdav 的 CloudBackup)。 */
+@Serializable
+data class CloudBackupInfo(
+    val name: String,
+    // 文件名内时间戳(epoch 毫秒);文件名不含合法时间戳时为 null
+    val fileNameTime: Long?,
+    // 服务器 last_modified(epoch 毫秒);缺失或无法解析时为 null
+    val lastModified: Long?,
+) : Parcelable {
+    override fun writeToParcel(parcel: Parcel, flags: Int) {
+        Parcelizer.encodeToParcel(serializer(), parcel, this)
+    }
+
+    override fun describeContents(): Int = 0
+
+    companion object CREATOR : Parcelable.Creator<CloudBackupInfo> {
+        override fun createFromParcel(parcel: Parcel): CloudBackupInfo {
+            return Parcelizer.decodeFromParcel(serializer(), parcel)
+        }
+
+        override fun newArray(size: Int): Array<CloudBackupInfo?> = arrayOfNulls(size)
+    }
+}
+
 /** 单条订阅的冲突信息(计划器 Conflict 的跨进程形态)。 */
 @Serializable
 data class SyncConflict(

@@ -11,14 +11,17 @@ import com.github.kr328.clash.common.sync.PlanAction
 import com.github.kr328.clash.common.sync.SyncKey
 import com.github.kr328.clash.common.sync.SyncPlanner
 import com.github.kr328.clash.common.sync.SyncPlan
+import com.github.kr328.clash.common.sync.SyncSnapshot
 import com.github.kr328.clash.common.sync.VergeBackup
 import com.github.kr328.clash.common.sync.VergeBackupCodec
+import com.github.kr328.clash.common.sync.VergeItem
 import com.github.kr328.clash.service.ProfileManager
 import com.github.kr328.clash.service.ProfileReceiver
 import com.github.kr328.clash.service.data.Imported
 import com.github.kr328.clash.service.data.ImportedDao
 import com.github.kr328.clash.service.model.Profile
 import com.github.kr328.clash.service.remote.ISyncManager
+import com.github.kr328.clash.service.remote.CloudBackupInfo
 import com.github.kr328.clash.service.remote.SYNC_KEY_KIND_NAME
 import com.github.kr328.clash.service.remote.SYNC_KEY_KIND_URL
 import com.github.kr328.clash.service.remote.SyncChoice
@@ -41,10 +44,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * 手动同步引擎(remote/ISyncManager 的 service 进程实现)。
  *
- * 流程:读本机 imported 订阅与云端最新备份包 → SyncPlanner 生成计划 →
+ * 同步流程:读本机 imported 订阅与云端最新备份包 → SyncPlanner 生成计划 →
  * 无冲突无删除直接执行;有冲突(PHASE_CONFLICTS)或含删除(PHASE_CONFIRM_DELETIONS)
  * 时挂起待续计划,经 resolve 按用户选择继续。所有动作完成后才持久化新快照,
  * 失败/取消保留旧快照(共享笔记 00 定稿语义)。
+ *
+ * 另实现云端历史管理(票 #7):列表 / 恢复(整体替换本机订阅并重建快照基线,
+ * 不经过合并计划)/ 删除单包;恢复与同步共用同一 busy 互斥。
  *
  * providers 往返:CMFA 的 imported/<uuid>/providers/ 在 verge 备份包里没有对应结构,
  * 推送时以 "cmfa-providers/<云端内容文件名>/<provider 文件名>" 注入 extraFiles
@@ -130,6 +136,94 @@ class SyncManager(
         }
     }
 
+    // ---- 云端历史管理(票 #7) ----
+
+    override suspend fun listCloudBackups(): List<CloudBackupInfo> {
+        val store = SyncStore(context)
+        if (store.webdavUrl.isBlank()) throw IllegalStateException("未配置 WebDAV 服务器地址")
+
+        val client = newClient(store)
+        client.ensureDirectory()
+
+        return client.listBackups().map {
+            CloudBackupInfo(
+                name = it.name,
+                fileNameTime = it.fileTimeMillis,
+                lastModified = it.lastModifiedMillis,
+            )
+        }
+    }
+
+    override suspend fun restoreBackup(name: String): SyncOutcome {
+        if (!busy.compareAndSet(false, true)) return busyOutcome()
+
+        try {
+            val store = SyncStore(context)
+            if (store.webdavUrl.isBlank()) return failed("未配置 WebDAV 服务器地址")
+
+            val backup = VergeBackupCodec.decode(newClient(store).fetchBackup(name))
+
+            // 1) 整体替换:清空现有 imported 订阅,逐个走既有删除语义(取消排期+删目录+删行)
+            for (uuid in ImportedDao().queryAllUUIDs()) {
+                profileManager.delete(uuid)
+            }
+
+            // 2) 按云端包条目逐个离线导入(与同步导入同一实现);增强条目与残缺条目
+            //    不落为本机订阅,原样留在包里(与 SyncPlanner.indexCloud 的取舍一致)
+            val restored = mutableListOf<String>()
+            val fingerprints = LinkedHashMap<SyncKey, String>()
+
+            for (item in backup.items) {
+                val key = when (item.type) {
+                    "remote" -> item.url?.let { SyncKey(SyncKey.Kind.URL, it) }
+                    "local" -> item.name?.let { SyncKey(SyncKey.Kind.NAME, it) }
+                    else -> null
+                } ?: continue
+
+                // 包内重复键与同步(plan 对重复键快速失败)同口径,拒绝含糊导入
+                require(key !in fingerprints) { "云端包内存在重复键的订阅条目: $key" }
+
+                val content = item.file?.let { backup.contentFiles[it] }
+
+                importOffline(
+                    key = key,
+                    name = item.name,
+                    url = item.url,
+                    item = item,
+                    content = content,
+                    providers = providersOf(backup, item.file),
+                )
+
+                restored += item.name ?: key.value
+                // 快照基线按实际落盘内容记指纹(与 readLocals 读回 config.yaml 的口径一致)
+                fingerprints[key] = SyncPlanner.fingerprint(content ?: ByteArray(0))
+            }
+
+            // 3) 恢复不是同步:不经过 SyncPlanner.plan,直接把基线重建为「本机 = 该包」;
+            //    只有导入全部成功才走到这里,失败时旧快照原样保留
+            SnapshotStore(context).store(SyncSnapshot(fingerprints))
+
+            return SyncOutcome(
+                phase = SyncOutcome.PHASE_DONE,
+                succeeded = true,
+                imported = restored,
+            )
+        } catch (e: Exception) {
+            Log.w("Sync restore failed: $e", e)
+
+            return failed(e)
+        } finally {
+            busy.set(false)
+        }
+    }
+
+    override suspend fun deleteCloudBackup(name: String) {
+        val store = SyncStore(context)
+        if (store.webdavUrl.isBlank()) throw IllegalStateException("未配置 WebDAV 服务器地址")
+
+        newClient(store).deleteBackup(name)
+    }
+
     // ---- 执行 ----
 
     private suspend fun execute(
@@ -143,7 +237,14 @@ class SyncManager(
         for (action in plan.actions) {
             when (action) {
                 is PlanAction.Import -> {
-                    importOffline(plan, action)
+                    importOffline(
+                        key = action.key,
+                        name = action.name,
+                        url = action.url,
+                        item = action.cloudItem,
+                        content = action.content,
+                        providers = providersOf(plan, action),
+                    )
 
                     imported += displayName(action)
                 }
@@ -180,34 +281,41 @@ class SyncManager(
     /**
      * 离线导入:云端包内容直接落盘(imported/<新uuid>/config.yaml + providers),
      * 写 imported 表行(不联网下载、不走 pending 流程),排期自动更新并广播。
+     * 同步导入与历史恢复共用;[content]/[providers] 必须取自云端包原始内容。
      */
-    private suspend fun importOffline(plan: SyncPlan, action: PlanAction.Import) {
+    private suspend fun importOffline(
+        key: SyncKey,
+        name: String?,
+        url: String?,
+        item: VergeItem,
+        content: ByteArray?,
+        providers: Map<String, ByteArray>,
+    ) {
         val uuid = generateProfileUUID()
         val dir = context.importedDir.resolve(uuid.toString())
 
         withContext(Dispatchers.IO) {
             dir.deleteRecursively()
             dir.mkdirs()
-            dir.resolve("config.yaml").writeBytes(action.content ?: ByteArray(0))
+            dir.resolve("config.yaml").writeBytes(content ?: ByteArray(0))
 
             val providersDir = dir.resolve("providers")
             providersDir.mkdirs()
 
-            for ((name, data) in providersOf(plan, action)) {
-                require(name.isNotEmpty() && name != "." && name != ".." && '/' !in name) {
-                    "非法的 provider 文件名: $name"
+            for ((fileName, data) in providers) {
+                require(fileName.isNotEmpty() && fileName != "." && fileName != ".." && '/' !in fileName) {
+                    "非法的 provider 文件名: $fileName"
                 }
 
-                providersDir.resolve(name).writeBytes(data)
+                providersDir.resolve(fileName).writeBytes(data)
             }
         }
 
-        val item = action.cloudItem
         val row = Imported(
             uuid = uuid,
-            name = action.name ?: action.key.value,
-            type = if (action.key.kind == SyncKey.Kind.URL) Profile.Type.Url else Profile.Type.File,
-            source = action.url ?: "",
+            name = name ?: key.value,
+            type = if (key.kind == SyncKey.Kind.URL) Profile.Type.Url else Profile.Type.File,
+            source = url ?: "",
             interval = item.option?.updateInterval?.takeIf { it > 0 }
                 ?.let { TimeUnit.MINUTES.toMillis(it) } ?: 0,
             upload = item.extra?.upload ?: 0,
@@ -345,6 +453,16 @@ class SyncManager(
         val prefix = PROVIDERS_PREFIX + file + "/"
 
         return plan.newCloudState.extraFiles
+            .filterKeys { it.startsWith(prefix) }
+            .mapKeys { it.key.removePrefix(prefix) }
+    }
+
+    /** 恢复的 providers:指定备份包内该条目内容文件名对应的前缀下全部文件。 */
+    private fun providersOf(backup: VergeBackup, file: String?): Map<String, ByteArray> {
+        file ?: return emptyMap()
+        val prefix = PROVIDERS_PREFIX + file + "/"
+
+        return backup.extraFiles
             .filterKeys { it.startsWith(prefix) }
             .mapKeys { it.key.removePrefix(prefix) }
     }

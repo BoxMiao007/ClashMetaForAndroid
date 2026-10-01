@@ -316,4 +316,17 @@
     <string name="sync_interval_12h">12 小时</string>
     <string name="sync_interval_24h">24 小时</string>
     <string name="sync_interval_custom">自定义…</string>
+    <string name="cloud_backup_history">云端备份历史</string>
+    <string name="cloud_backup_empty">云端还没有备份包</string>
+    <string name="cloud_backup_platform_cmfa">CMFA</string>
+    <string name="cloud_backup_platform_verge">Clash Verge(%1$s)</string>
+    <string name="cloud_backup_restore_action">恢复</string>
+    <string name="cloud_backup_delete_action">删除</string>
+    <string name="cloud_backup_restore_confirm_title">恢复备份</string>
+    <string name="cloud_backup_restore_confirm_message">将用所选备份整体替换手机上的全部订阅，且无法撤销。\n\n备份包：%1$s\n\n确定继续？</string>
+    <string name="cloud_backup_restore_done">恢复完成</string>
+    <string name="cloud_backup_restore_done_names">已恢复：%1$s</string>
+    <string name="cloud_backup_delete_confirm_title">删除备份包</string>
+    <string name="cloud_backup_delete_confirm_message">确定删除云端备份包 %1$s？不影响其他备份包。</string>
+    <string name="cloud_backup_deleted">已删除</string>
 </resources>
