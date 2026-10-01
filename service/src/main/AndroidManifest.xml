@@ -67,6 +67,11 @@
             android:authorities="${applicationId}.settings"
             android:exported="false"
             android:process=":background" />
+        <provider
+            android:name=".sync.SyncPreferenceProvider"
+            android:authorities="${applicationId}.sync_settings"
+            android:exported="false"
+            android:process=":background" />
 
         <receiver
             android:name=".ProfileReceiver"

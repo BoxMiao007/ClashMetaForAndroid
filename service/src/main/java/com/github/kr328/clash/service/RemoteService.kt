@@ -5,7 +5,9 @@ import android.os.IBinder
 import com.github.kr328.clash.service.remote.IClashManager
 import com.github.kr328.clash.service.remote.IRemoteService
 import com.github.kr328.clash.service.remote.IProfileManager
+import com.github.kr328.clash.service.remote.ISyncManager
 import com.github.kr328.clash.service.remote.wrap
+import com.github.kr328.clash.service.sync.SyncManager
 import com.github.kr328.clash.service.util.cancelAndJoinBlocking
 
 class RemoteService : BaseService(), IRemoteService {
@@ -13,8 +15,10 @@ class RemoteService : BaseService(), IRemoteService {
 
     private var clash: ClashManager? = null
     private var profile: ProfileManager? = null
+    private var sync: SyncManager? = null
     private var clashBinder: IClashManager? = null
     private var profileBinder: IProfileManager? = null
+    private var syncBinder: ISyncManager? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -23,6 +27,9 @@ class RemoteService : BaseService(), IRemoteService {
         profile = ProfileManager(this)
         clashBinder = clash?.wrap() as IClashManager?
         profileBinder = profile?.wrap() as IProfileManager?
+
+        sync = SyncManager(this, profile!!)
+        syncBinder = sync?.wrap() as ISyncManager?
     }
 
     override fun onDestroy() {
@@ -42,5 +49,9 @@ class RemoteService : BaseService(), IRemoteService {
 
     override fun profile(): IProfileManager {
         return profileBinder!!
+    }
+
+    override fun sync(): ISyncManager {
+        return syncBinder!!
     }
 }

@@ -15,4 +15,8 @@
     <include
         domain="file"
         path="clash/override.json" />
+    <!-- WebDAV 同步凭证仅存本机,排除出自动备份 -->
+    <exclude
+        domain="sharedpref"
+        path="sync.xml" />
 </full-backup-content>

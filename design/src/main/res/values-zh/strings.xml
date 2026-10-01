@@ -280,4 +280,29 @@
     <string name="shortcut_start_long">启动 Clash 服务</string>
     <string name="shortcut_stop_short">停止 Clash</string>
     <string name="shortcut_stop_long">停止 Clash 服务</string>
+
+    <string name="sync">同步</string>
+    <string name="webdav">WebDAV</string>
+    <string name="webdav_url">服务器地址</string>
+    <string name="webdav_username">账号</string>
+    <string name="webdav_password">密码</string>
+    <string name="webdav_not_set">未设置</string>
+    <string name="sync_now">立即同步</string>
+    <string name="sync_running">正在同步…</string>
+    <string name="sync_result_empty">尚未同步</string>
+    <string name="sync_cancelled">已取消同步</string>
+    <string name="sync_failed">同步失败：%1$s</string>
+    <string name="sync_done_no_changes">同步完成，无变更</string>
+    <string name="sync_result_imported">导入：%1$s</string>
+    <string name="sync_result_pushed">推送：%1$s</string>
+    <string name="sync_result_deleted_local">删除本机：%1$s</string>
+    <string name="sync_result_deleted_cloud">删除云端：%1$s</string>
+    <string name="sync_conflict_title">同步冲突</string>
+    <string name="sync_conflict_message">上次同步后，同一订阅在本机和云端都被修改过：\n\n本地：%1$s\n云端：%2$s\n\n请选择保留哪一侧。</string>
+    <string name="sync_use_local">用本地</string>
+    <string name="sync_use_cloud">用云端</string>
+    <string name="sync_delete_confirm_title">确认删除</string>
+    <string name="sync_delete_confirm_message">同步将删除以下订阅，确认继续？\n\n%1$s</string>
+    <string name="sync_delete_section_local">本机：%1$s</string>
+    <string name="sync_delete_section_cloud">云端：%1$s</string>
 </resources>
