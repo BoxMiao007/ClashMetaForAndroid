@@ -305,4 +305,15 @@
     <string name="sync_delete_confirm_message">同步将删除以下订阅，确认继续？\n\n%1$s</string>
     <string name="sync_delete_section_local">本机：%1$s</string>
     <string name="sync_delete_section_cloud">云端：%1$s</string>
+    <string name="sync_auto">自动同步</string>
+    <string name="sync_startup_sync">启动时同步</string>
+    <string name="sync_periodic_sync">定时同步</string>
+    <string name="sync_interval">同步间隔</string>
+    <string name="sync_interval_hint">间隔（分钟）</string>
+    <string name="sync_interval_30m">30 分钟</string>
+    <string name="sync_interval_1h">1 小时</string>
+    <string name="sync_interval_6h">6 小时</string>
+    <string name="sync_interval_12h">12 小时</string>
+    <string name="sync_interval_24h">24 小时</string>
+    <string name="sync_interval_custom">自定义…</string>
 </resources>

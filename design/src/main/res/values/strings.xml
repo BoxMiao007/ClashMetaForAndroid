@@ -396,4 +396,15 @@
     <string name="sync_delete_confirm_message">The following subscriptions will be deleted by sync:\n\n%1$s</string>
     <string name="sync_delete_section_local">Local: %1$s</string>
     <string name="sync_delete_section_cloud">Cloud: %1$s</string>
+    <string name="sync_auto">Automatic Sync</string>
+    <string name="sync_startup_sync">Sync on App Start</string>
+    <string name="sync_periodic_sync">Periodic Sync</string>
+    <string name="sync_interval">Sync Interval</string>
+    <string name="sync_interval_hint">Interval in minutes</string>
+    <string name="sync_interval_30m">30 minutes</string>
+    <string name="sync_interval_1h">1 hour</string>
+    <string name="sync_interval_6h">6 hours</string>
+    <string name="sync_interval_12h">12 hours</string>
+    <string name="sync_interval_24h">24 hours</string>
+    <string name="sync_interval_custom">Custom…</string>
 </resources>

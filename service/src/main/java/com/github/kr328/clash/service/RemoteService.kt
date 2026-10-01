@@ -7,6 +7,7 @@ import com.github.kr328.clash.service.remote.IRemoteService
 import com.github.kr328.clash.service.remote.IProfileManager
 import com.github.kr328.clash.service.remote.ISyncManager
 import com.github.kr328.clash.service.remote.wrap
+import com.github.kr328.clash.service.sync.SyncEngine
 import com.github.kr328.clash.service.sync.SyncManager
 import com.github.kr328.clash.service.util.cancelAndJoinBlocking
 
@@ -28,7 +29,7 @@ class RemoteService : BaseService(), IRemoteService {
         clashBinder = clash?.wrap() as IClashManager?
         profileBinder = profile?.wrap() as IProfileManager?
 
-        sync = SyncManager(this, profile!!)
+        sync = SyncEngine.obtain(this)
         syncBinder = sync?.wrap() as ISyncManager?
     }
 

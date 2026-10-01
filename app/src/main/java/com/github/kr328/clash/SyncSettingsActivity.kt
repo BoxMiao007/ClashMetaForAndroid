@@ -6,6 +6,7 @@ import com.github.kr328.clash.design.SyncSettingsDesign
 import com.github.kr328.clash.service.remote.SyncChoice
 import com.github.kr328.clash.service.remote.SyncConflict
 import com.github.kr328.clash.service.remote.SyncOutcome
+import com.github.kr328.clash.service.sync.SyncReceiver
 import com.github.kr328.clash.service.sync.SyncStore
 import com.github.kr328.clash.util.withSync
 import kotlinx.coroutines.isActive
@@ -28,6 +29,14 @@ class SyncSettingsActivity : BaseActivity<SyncSettingsDesign>() {
                 design.requests.onReceive {
                     when (it) {
                         SyncSettingsDesign.Request.StartSync -> runSync(design)
+
+                        // 开关/间隔变更后立即重排或取消定时
+                        SyncSettingsDesign.Request.AutoSyncChanged ->
+                            SyncReceiver.schedule(this@SyncSettingsActivity)
+
+                        SyncSettingsDesign.Request.CustomInterval ->
+                            if (design.requestCustomInterval())
+                                SyncReceiver.schedule(this@SyncSettingsActivity)
                     }
                 }
             }
