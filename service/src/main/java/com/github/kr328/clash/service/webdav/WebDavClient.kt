@@ -12,6 +12,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.MalformedURLException
+import java.net.ProtocolException
 import java.net.URI
 import java.net.URISyntaxException
 import java.net.URL
@@ -36,7 +37,7 @@ class WebDavClient(
     baseUrl: String,
     private val username: String,
     private val password: String,
-    remoteDirectory: String = DEFAULT_REMOTE_DIRECTORY,
+    private val remoteDirectory: String = DEFAULT_REMOTE_DIRECTORY,
 ) {
     private val directoryUrl = "${baseUrl.trimEnd('/')}/$remoteDirectory/"
 
@@ -59,7 +60,11 @@ class WebDavClient(
         }
     }
 
-    /** 确保远程目录存在(MKCOL)。目录已存在不算错误;409 表示父目录缺失。 */
+    /**
+     * 确保远程目录存在(MKCOL)。目录已存在不算错误;409 表示父目录缺失。
+     * 403 不中断(如坚果云禁止 WebDAV 建目录,目录可能已由其客户端创建),
+     * 目录若真缺失,后续 PROPFIND/PUT 会给出带指引的明确错误。
+     */
     suspend fun ensureDirectory(): Unit = withContext(Dispatchers.IO) {
         open(directoryUrl, METHOD_MKCOL, TIMEOUT_FAST_MS).useConnection { connection ->
             val code = connection.responseCode
@@ -67,6 +72,7 @@ class WebDavClient(
                 code in HTTP_SUCCESS -> Unit
                 // RFC 4918:MKCOL 到已存在的目录返回 405
                 code == HTTP_METHOD_NOT_ALLOWED -> Unit
+                code == HTTP_FORBIDDEN -> Unit
                 code == HTTP_CONFLICT -> throw WebDavException(
                     "创建远程目录失败: 父目录缺失(HTTP 409)",
                     code,
@@ -94,6 +100,14 @@ class WebDavClient(
 
             val code = connection.responseCode
             if (code != HTTP_MULTI_STATUS) {
+                // 部分网盘(如坚果云)目录缺失时不返回 404,而是 403/501 等不支持类错误
+                if (code == HttpURLConnection.HTTP_NOT_FOUND || code == HttpURLConnection.HTTP_NOT_IMPLEMENTED) {
+                    throw WebDavException(
+                        "云端目录 $remoteDirectory 不存在或服务器不支持列出:" +
+                            "请先在网盘的网页/客户端里手动创建该目录后重试",
+                        code,
+                    )
+                }
                 throw WebDavException("获取云端历史失败: HTTP $code ${readBody(connection)}", code)
             }
             connection.inputStream.use(::parseMultistatus)
@@ -164,7 +178,7 @@ class WebDavClient(
 
     private fun open(url: String, method: String, timeoutMillis: Int): HttpURLConnection {
         val connection = URL(url).openConnection() as HttpURLConnection
-        connection.requestMethod = method
+        setRequestMethod(connection, method)
         connection.connectTimeout = timeoutMillis
         connection.readTimeout = timeoutMillis
         // WebDAV 请求携带认证与方法语义,重定向会导致语义丢失,直接失败以便定位
@@ -172,6 +186,32 @@ class WebDavClient(
         connection.setRequestProperty(HEADER_AUTHORIZATION, authorization)
         connection.setRequestProperty(HEADER_USER_AGENT, USER_AGENT)
         return connection
+    }
+
+    /**
+     * 发出 WebDAV 动词。Android 的 HttpURLConnection 校验方法白名单
+     * (仅 OPTIONS/GET/HEAD/POST/PUT/DELETE/TRACE/PATCH),MKCOL/PROPFIND 会被
+     * ProtocolException 拒绝;沿类层次反射直设 method 字段绕过。
+     */
+    private fun setRequestMethod(connection: HttpURLConnection, method: String) {
+        try {
+            connection.requestMethod = method
+            return
+        } catch (_: ProtocolException) {
+            // 白名单外的动词,走反射
+        }
+        var clazz: Class<*> = connection.javaClass
+        while (clazz != Any::class.java) {
+            try {
+                val field = clazz.getDeclaredField("method")
+                field.isAccessible = true
+                field.set(connection, method)
+                return
+            } catch (_: NoSuchFieldException) {
+                clazz = clazz.superclass
+            }
+        }
+        throw IllegalStateException("无法发出 WebDAV 动词 $method:反射设置 method 失败")
     }
 
     /**
@@ -288,6 +328,7 @@ class WebDavClient(
 
         private const val HTTP_OK = HttpURLConnection.HTTP_OK
         private const val HTTP_METHOD_NOT_ALLOWED = HttpURLConnection.HTTP_BAD_METHOD
+        private const val HTTP_FORBIDDEN = HttpURLConnection.HTTP_FORBIDDEN
         private const val HTTP_CONFLICT = HttpURLConnection.HTTP_CONFLICT
 
         // HttpURLConnection 无 207 常量
