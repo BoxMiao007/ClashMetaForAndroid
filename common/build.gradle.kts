@@ -8,4 +8,7 @@ dependencies {
 
     implementation(libs.kotlin.coroutine)
     implementation(libs.androidx.core)
+    implementation(libs.snakeyaml)
+
+    testImplementation(libs.junit4)
 }

@@ -8,6 +8,8 @@ import com.github.kr328.clash.common.log.Log
 import com.github.kr328.clash.remote.Remote
 import com.github.kr328.clash.service.util.sendServiceRecreated
 import com.github.kr328.clash.util.clashDir
+import com.github.kr328.clash.util.startupSync
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 
@@ -30,6 +32,11 @@ class MainApplication : Application() {
 
         if (processName == packageName) {
             Remote.launch()
+
+            // 启动时同步:服务未连接时在协程内挂起等待,不阻塞启动(见 util/StartupSync)
+            Global.launch {
+                startupSync(this@MainApplication)
+            }
         } else {
             sendServiceRecreated()
         }

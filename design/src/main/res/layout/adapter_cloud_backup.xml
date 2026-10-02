@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layout xmlns:android="http://schemas.android.com/apk/res/android">
+    <data>
+        <variable
+            name="backup"
+            type="com.github.kr328.clash.service.remote.CloudBackupInfo" />
+
+        <variable
+            name="title"
+            type="java.lang.String" />
+
+        <variable
+            name="subtitle"
+            type="java.lang.String" />
+
+        <variable
+            name="restore"
+            type="android.view.View.OnClickListener" />
+
+        <variable
+            name="delete"
+            type="android.view.View.OnClickListener" />
+    </data>
+
+    <RelativeLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginVertical="5dp"
+        android:layout_marginHorizontal="@dimen/item_header_margin"
+        android:background="@drawable/bg_b"
+        android:elevation="5dp"
+        android:minHeight="@dimen/item_min_height">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_centerVertical="true"
+            android:layout_alignParentStart="true"
+            android:layout_toStartOf="@id/actions_view"
+            android:orientation="vertical"
+            android:paddingVertical="@dimen/item_padding_vertical"
+            android:paddingStart="@dimen/item_header_margin">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:text="@{title}"
+                android:textAppearance="@style/TextAppearance.MaterialComponents.Body1" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/item_text_margin"
+                android:text="@{subtitle}"
+                android:textAppearance="@style/TextAppearance.MaterialComponents.Body2" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/actions_view"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_alignParentEnd="true"
+            android:layout_centerVertical="true"
+            android:orientation="horizontal">
+
+            <FrameLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:contentDescription="@string/cloud_backup_restore_action"
+                android:focusable="true"
+                android:onClick="@{restore}">
+
+                <View
+                    android:layout_width="@dimen/item_tailing_component_size"
+                    android:layout_height="@dimen/item_tailing_component_size"
+                    android:layout_margin="@dimen/item_tailing_margin"
+                    android:background="@drawable/ic_baseline_restore" />
+            </FrameLayout>
+
+            <FrameLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:contentDescription="@string/cloud_backup_delete_action"
+                android:focusable="true"
+                android:onClick="@{delete}">
+
+                <View
+                    android:layout_width="@dimen/item_tailing_component_size"
+                    android:layout_height="@dimen/item_tailing_component_size"
+                    android:layout_margin="@dimen/item_tailing_margin"
+                    android:background="@drawable/ic_baseline_delete" />
+            </FrameLayout>
+        </LinearLayout>
+    </RelativeLayout>
+</layout>

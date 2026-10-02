@@ -173,6 +173,16 @@
             android:exported="false"
             android:label="@string/meta_features" />
         <activity
+            android:name=".SyncSettingsActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:label="@string/sync" />
+        <activity
+            android:name=".CloudBackupHistoryActivity"
+            android:configChanges="uiMode"
+            android:exported="false"
+            android:label="@string/cloud_backup_history" />
+        <activity
             android:name=".AccessControlActivity"
             android:configChanges="uiMode"
             android:exported="false"

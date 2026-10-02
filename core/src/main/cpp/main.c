@@ -320,6 +320,32 @@ Java_com_github_kr328_clash_core_bridge_Bridge_nativeVerityPublicKeys(JNIEnv *en
     return (jboolean) verityPublicKeys(_public_keys);
 }
 
+JNIEXPORT jint JNICALL
+Java_com_github_kr328_clash_core_bridge_Bridge_nativeWebdavRequest(JNIEnv *env, jobject thiz,
+                                                                    jstring method,
+                                                                    jstring url,
+                                                                    jstring authorization,
+                                                                    jstring user_agent,
+                                                                    jstring depth,
+                                                                    jstring content_type,
+                                                                    jstring body_path,
+                                                                    jstring out_path,
+                                                                    jint timeout_seconds) {
+    TRACE_METHOD();
+
+    scoped_string _method = get_string(method);
+    scoped_string _url = get_string(url);
+    scoped_string _authorization = get_string(authorization);
+    scoped_string _user_agent = get_string(user_agent);
+    scoped_string _depth = get_string(depth);
+    scoped_string _content_type = get_string(content_type);
+    scoped_string _body_path = get_string(body_path);
+    scoped_string _out_path = get_string(out_path);
+
+    return (jint) webdavRequest(_method, _url, _authorization, _user_agent, _depth,
+                                _content_type, _body_path, _out_path, timeout_seconds);
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_github_kr328_clash_core_bridge_Bridge_nativeQueryProviders(JNIEnv *env, jobject thiz) {
     TRACE_METHOD();

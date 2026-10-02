@@ -67,6 +67,11 @@
             android:authorities="${applicationId}.settings"
             android:exported="false"
             android:process=":background" />
+        <provider
+            android:name=".sync.SyncPreferenceProvider"
+            android:authorities="${applicationId}.sync_settings"
+            android:exported="false"
+            android:process=":background" />
 
         <receiver
             android:name=".ProfileReceiver"
@@ -83,6 +88,20 @@
             <intent-filter>
                 <action android:name="{applicationId}.intent.action.PROFILE_REQUEST_UPDATE" />
                 <data android:scheme="uuid" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".sync.SyncReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="${applicationId}.permission.RECEIVE_BROADCASTS"
+            android:process=":background">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
             </intent-filter>
         </receiver>
     </application>
