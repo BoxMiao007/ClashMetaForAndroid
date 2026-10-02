@@ -1,17 +1,14 @@
 <!-- vibe-coding-declaration:begin -->
-## 本 fork 声明
-
-本仓库是 MetaCubeX/ClashMetaForAndroid 的个人 fork,以 Vibe Coding 方式维护:维护者只提需求和验收,所有实现、验证、提交由 AI agent 完成;不向上游提交。fork 自身的问题请勿反馈到上游。
+> [!IMPORTANT]
+> 本仓库由 AI 开发与维护，所有代码变更均由 AI 执行。
 <!-- vibe-coding-declaration:end -->
 
 <!-- vibe-feature-registry:begin -->
-## 本 fork 功能登记
+## 本 Fork 功能清单
 
-唯一事实源在 `AGENTS.md` 的「功能清单」,下表是给人看的镜像。
-
-| 功能 | 一句话说明 |
-| ---- | ---------- |
-| WebDAV 订阅双向同步 | 设置→同步:与 clash-verge-rev 共用坚果云等 WebDAV,订阅列表与内容双向并集同步(删除传播、冲突确认、云端历史);HTTP 传输走 Go 内核以兼容坚果云。 |
+| 功能 | 一句话说明 | 关键文件/入口 | 引入提交 |
+| ---- | ---------- | -------------- | -------- |
+| WebDAV 订阅双向同步 | 与 clash-verge-rev 经同一 WebDAV 双向同步订阅:并集合并、删除传播、冲突弹窗、云端历史管理;HTTP 传输走 Go 内核(绕坚果云 TLS 指纹拦截) | 设置→同步(service/sync、common/sync、service/webdav、core webdav 桥) | feat/webdav-sync(c6d35833) |
 <!-- vibe-feature-registry:end -->
 
 ## Clash Meta for Android
