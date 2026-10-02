@@ -57,3 +57,5 @@
     boolean getDEBUG() return false;
     boolean getRECOVER_STACK_TRACES() return false;
 }
+# snakeyaml 引用桌面 JVM 的 java.beans 内省类,Android 上不存在;压制 R8 缺失类警告(WebDAV 同步引入依赖)
+-dontwarn java.beans.**
