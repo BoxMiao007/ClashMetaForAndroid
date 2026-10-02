@@ -44,6 +44,25 @@ object Bridge {
     )
 
     external fun nativeReadOverride(slot: Int): String
+
+    /**
+     * 发出一次 WebDAV HTTP 请求,由 Go 内核的 net/http 完成 TLS 传输。
+     *
+     * 响应体(无论状态码)写入 [outPath];网络层失败时返回 0,
+     * 并把错误文本写入 [outPath]。depth/contentType 传空串表示不发送该头。
+     * bodyPath 传空串表示无请求体。同步阻塞,调用方自行放 IO 线程。
+     */
+    external fun nativeWebdavRequest(
+        method: String,
+        url: String,
+        authorization: String,
+        userAgent: String,
+        depth: String,
+        contentType: String,
+        bodyPath: String,
+        outPath: String,
+        timeoutSeconds: Int,
+    ): Int
     external fun nativeWriteOverride(slot: Int, content: String)
     external fun nativeClearOverride(slot: Int)
     external fun nativeQueryConfiguration(): String

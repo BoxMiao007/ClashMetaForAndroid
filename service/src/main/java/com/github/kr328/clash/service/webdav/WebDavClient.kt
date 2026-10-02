@@ -2,17 +2,18 @@ package com.github.kr328.clash.service.webdav
 
 import android.util.Base64
 import com.github.kr328.clash.common.sync.BackupFileName
+import com.github.kr328.clash.core.bridge.Bridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserException
 import org.xmlpull.v1.XmlPullParserFactory
+import java.io.ByteArrayInputStream
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
-import java.net.HttpURLConnection
 import java.net.MalformedURLException
-import java.net.ProtocolException
 import java.net.URI
 import java.net.URISyntaxException
 import java.net.URL
@@ -30,13 +31,19 @@ import java.net.URL
  * 调用方在 [listBackups] 前需先 [ensureDirectory]。
  * 与 verge 不同,本实现不做证书豁免,证书问题原样暴露,便于定位。
  *
+ * HTTP 传输走 Go 内核([Bridge.nativeWebdavRequest],net/http + crypto/tls):
+ * 坚果云等网盘的 WAF 按 TLS 客户端指纹拦截 Android Java 栈(conscrypt)的连接,
+ * Go 的 TLS 栈可正常通过,且与订阅下载同栈。
+ *
  * @param baseUrl WebDAV 服务器根地址,如 https://example.com/dav(可含路径,不以 / 结尾亦可)
+ * @param cacheDir 用于存放请求/响应临时文件的目录(大文件走文件而非 JNI 内存数组)
  * @param remoteDirectory 备份目录名,默认与 verge 一致
  */
 class WebDavClient(
     baseUrl: String,
     private val username: String,
     private val password: String,
+    private val cacheDir: File,
     private val remoteDirectory: String = DEFAULT_REMOTE_DIRECTORY,
 ) {
     private val directoryUrl = "${baseUrl.trimEnd('/')}/$remoteDirectory/"
@@ -66,23 +73,20 @@ class WebDavClient(
      * 目录若真缺失,后续 PROPFIND/PUT 会给出带指引的明确错误。
      */
     suspend fun ensureDirectory(): Unit = withContext(Dispatchers.IO) {
-        open(directoryUrl, METHOD_MKCOL, TIMEOUT_FAST_MS).useConnection { connection ->
-            val code = connection.responseCode
-            when {
-                code in HTTP_SUCCESS -> Unit
-                // RFC 4918:MKCOL 到已存在的目录返回 405
-                code == HTTP_METHOD_NOT_ALLOWED -> Unit
-                code == HTTP_FORBIDDEN -> Unit
-                code == HTTP_CONFLICT -> throw WebDavException(
-                    "创建远程目录失败: 父目录缺失(HTTP 409)",
-                    code,
-                )
-                else -> {
-                    // 部分服务器不按 RFC 返回 405,而是 4xx/5xx 附带 "already exist" 文本
-                    val body = readBody(connection)
-                    if (!body.contains(BODY_ALREADY_EXISTS, ignoreCase = true)) {
-                        throw WebDavException("创建远程目录失败: HTTP $code $body", code)
-                    }
+        val (code, body) = request(directoryUrl, METHOD_MKCOL, TIMEOUT_FAST_SECONDS)
+        when {
+            code in HTTP_SUCCESS -> Unit
+            // RFC 4918:MKCOL 到已存在的目录返回 405
+            code == HTTP_METHOD_NOT_ALLOWED -> Unit
+            code == HTTP_FORBIDDEN -> Unit
+            code == HTTP_CONFLICT -> throw WebDavException(
+                "创建远程目录失败: 父目录缺失(HTTP 409)",
+                code,
+            )
+            else -> {
+                // 部分服务器不按 RFC 返回 405,而是 4xx/5xx 附带 "already exist" 文本
+                if (!body.contains(BODY_ALREADY_EXISTS, ignoreCase = true)) {
+                    throw WebDavException("创建远程目录失败: HTTP $code $body", code)
                 }
             }
         }
@@ -90,41 +94,37 @@ class WebDavClient(
 
     /** 列出云端全部备份包,按时间倒序(见 [CloudBackup.effectiveTimeMillis])。 */
     suspend fun listBackups(): List<CloudBackup> = withContext(Dispatchers.IO) {
-        val files = open(directoryUrl, METHOD_PROPFIND, TIMEOUT_FAST_MS).useConnection { connection ->
-            connection.setRequestProperty(HEADER_DEPTH, "1")
-            connection.setRequestProperty(HEADER_CONTENT_TYPE, CONTENT_TYPE_XML)
-            connection.doOutput = true
-            connection.setFixedLengthStreamingMode(PROPFIND_BODY.size)
-
-            connection.outputStream.use { it.write(PROPFIND_BODY) }
-
-            val code = connection.responseCode
-            if (code != HTTP_MULTI_STATUS) {
-                // 部分网盘(如坚果云)目录缺失时不返回 404,而是 403/501 等不支持类错误
-                if (code == HttpURLConnection.HTTP_NOT_FOUND || code == HttpURLConnection.HTTP_NOT_IMPLEMENTED) {
-                    throw WebDavException(
-                        "云端目录 $remoteDirectory 不存在或服务器不支持列出:" +
-                            "请先在网盘的网页/客户端里手动创建该目录后重试",
-                        code,
-                    )
-                }
-                throw WebDavException("获取云端历史失败: HTTP $code ${readBody(connection)}", code)
+        val (code, body) = request(
+            directoryUrl,
+            METHOD_PROPFIND,
+            TIMEOUT_FAST_SECONDS,
+            depth = "1",
+            contentType = CONTENT_TYPE_XML,
+            requestBody = PROPFIND_BODY,
+        )
+        if (code != HTTP_MULTI_STATUS) {
+            // 部分网盘(如坚果云)目录缺失时不返回 404,而是 403/501 等不支持类错误
+            if (code == 404 || code == 501) {
+                throw WebDavException(
+                    "云端目录 $remoteDirectory 不存在或服务器不支持列出:" +
+                        "请先在网盘的网页/客户端里手动创建该目录后重试",
+                    code,
+                )
             }
-            connection.inputStream.use(::parseMultistatus)
+            throw WebDavException("获取云端历史失败: HTTP $code $body", code)
         }
-        files.sortedWith(compareByDescending<CloudBackup> { it.effectiveTimeMillis ?: Long.MIN_VALUE })
+        body.byteInputStream().use(::parseMultistatus)
+            .sortedWith(compareByDescending<CloudBackup> { it.effectiveTimeMillis ?: Long.MIN_VALUE })
     }
 
     /** 下载备份包(GET)。文件不存在时抛出带 404 状态码的 [WebDavException]。 */
     suspend fun fetchBackup(name: String): ByteArray = withContext(Dispatchers.IO) {
         val url = backupUrl(name)
-        open(url, METHOD_GET, TIMEOUT_TRANSFER_MS).useConnection { connection ->
-            val code = connection.responseCode
-            if (code != HTTP_OK) {
-                throw WebDavException("下载备份包失败: HTTP $code ${readBody(connection)}", code)
-            }
-            connection.inputStream.use { it.readBytes() }
+        val (code, data, body) = requestForBytes(url, METHOD_GET, TIMEOUT_TRANSFER_SECONDS)
+        if (code != HTTP_OK) {
+            throw WebDavException("下载备份包失败: HTTP $code $body", code)
         }
+        data
     }
 
     /** 上传备份包(PUT)。失败自动重试 1 次,间隔 500 毫秒;4xx 错误不重试。 */
@@ -133,15 +133,14 @@ class WebDavClient(
         var attempt = 0
         while (true) {
             try {
-                open(url, METHOD_PUT, TIMEOUT_TRANSFER_MS).useConnection { connection ->
-                    connection.doOutput = true
-                    connection.setFixedLengthStreamingMode(data.size)
-                    connection.outputStream.use { it.write(data) }
-
-                    val code = connection.responseCode
-                    if (code !in HTTP_SUCCESS) {
-                        throw WebDavException("上传备份包失败: HTTP $code ${readBody(connection)}", code)
-                    }
+                val (code, _, body) = requestForBytes(
+                    url,
+                    METHOD_PUT,
+                    TIMEOUT_TRANSFER_SECONDS,
+                    requestBody = data,
+                )
+                if (code !in HTTP_SUCCESS) {
+                    throw WebDavException("上传备份包失败: HTTP $code $body", code)
                 }
                 return@withContext
             } catch (e: WebDavException) {
@@ -159,11 +158,9 @@ class WebDavClient(
     /** 删除备份包(DELETE)。 */
     suspend fun deleteBackup(name: String): Unit = withContext(Dispatchers.IO) {
         val url = backupUrl(name)
-        open(url, METHOD_DELETE, TIMEOUT_FAST_MS).useConnection { connection ->
-            val code = connection.responseCode
-            if (code !in HTTP_SUCCESS) {
-                throw WebDavException("删除备份包失败: HTTP $code ${readBody(connection)}", code)
-            }
+        val (code, body) = request(url, METHOD_DELETE, TIMEOUT_FAST_SECONDS)
+        if (code !in HTTP_SUCCESS) {
+            throw WebDavException("删除备份包失败: HTTP $code $body", code)
         }
     }
 
@@ -176,42 +173,63 @@ class WebDavClient(
         return "$directoryUrl$name"
     }
 
-    private fun open(url: String, method: String, timeoutMillis: Int): HttpURLConnection {
-        val connection = URL(url).openConnection() as HttpURLConnection
-        setRequestMethod(connection, method)
-        connection.connectTimeout = timeoutMillis
-        connection.readTimeout = timeoutMillis
-        // WebDAV 请求携带认证与方法语义,重定向会导致语义丢失,直接失败以便定位
-        connection.instanceFollowRedirects = false
-        connection.setRequestProperty(HEADER_AUTHORIZATION, authorization)
-        connection.setRequestProperty(HEADER_USER_AGENT, USER_AGENT)
-        return connection
+    /**
+     * 发出一次请求,返回 (状态码, 响应体文本)。响应体按 UTF-8 解码,仅用于
+     * 207 multistatus 与错误诊断,别用于二进制。
+     * 网络层失败(连接不上、超时、TLS 握手失败)抛原始 [IOException]。
+     */
+    private fun request(
+        url: String,
+        method: String,
+        timeoutSeconds: Int,
+        depth: String? = null,
+        contentType: String? = null,
+        requestBody: ByteArray? = null,
+    ): Pair<Int, String> {
+        val (code, data, body) = requestForBytes(url, method, timeoutSeconds, depth, contentType, requestBody)
+        return code to body
     }
 
     /**
-     * 发出 WebDAV 动词。Android 的 HttpURLConnection 校验方法白名单
-     * (仅 OPTIONS/GET/HEAD/POST/PUT/DELETE/TRACE/PATCH),MKCOL/PROPFIND 会被
-     * ProtocolException 拒绝;沿类层次反射直设 method 字段绕过。
+     * 发出一次请求,返回 (状态码, 响应体字节, 响应体文本)。文本仅错误时才解码使用。
+     * 经 [Bridge.nativeWebdavRequest] 由 Go 内核传输;请求/响应体经临时文件
+     * 中转(备份 zip 可达数 MB,不走 JNI 内存数组),finally 里清理。
+     * 状态码 0 表示网络层失败,Go 侧已把错误文本写入响应临时文件。
      */
-    private fun setRequestMethod(connection: HttpURLConnection, method: String) {
+    private fun requestForBytes(
+        url: String,
+        method: String,
+        timeoutSeconds: Int,
+        depth: String? = null,
+        contentType: String? = null,
+        requestBody: ByteArray? = null,
+    ): Triple<Int, ByteArray, String> {
+        val outFile = File.createTempFile("cfa-webdav-out", null, cacheDir)
+        val inFile = requestBody?.let {
+            File.createTempFile("cfa-webdav-in", null, cacheDir).apply { writeBytes(it) }
+        }
         try {
-            connection.requestMethod = method
-            return
-        } catch (_: ProtocolException) {
-            // 白名单外的动词,走反射
-        }
-        var clazz: Class<*> = connection.javaClass
-        while (clazz != Any::class.java) {
-            try {
-                val field = clazz.getDeclaredField("method")
-                field.isAccessible = true
-                field.set(connection, method)
-                return
-            } catch (_: NoSuchFieldException) {
-                clazz = clazz.superclass
+            val code = Bridge.nativeWebdavRequest(
+                method,
+                url,
+                authorization,
+                USER_AGENT,
+                depth.orEmpty(),
+                contentType.orEmpty(),
+                inFile?.absolutePath.orEmpty(),
+                outFile.absolutePath,
+                timeoutSeconds,
+            )
+            val data = outFile.readBytes()
+            if (code == 0) {
+                // Go 侧网络错误文本在此文件里;空则给兜底消息
+                throw IOException(data.toString(Charsets.UTF_8).ifEmpty { "网络请求失败" })
             }
+            return Triple(code, data, data.toString(Charsets.UTF_8))
+        } finally {
+            inFile?.delete()
+            outFile.delete()
         }
-        throw IllegalStateException("无法发出 WebDAV 动词 $method:反射设置 method 失败")
     }
 
     /**
@@ -297,18 +315,6 @@ class WebDavClient(
         return name.takeIf { it.isNotEmpty() }
     }
 
-    /**
-     * 读取错误响应体前 200 字符用于诊断。读取失败不影响主错误——
-     * HTTP 状态码已在异常消息中。
-     */
-    private fun readBody(connection: HttpURLConnection): String =
-        try {
-            val stream = connection.errorStream ?: connection.inputStream
-            stream?.readBytes()?.toString(Charsets.UTF_8)?.take(200) ?: ""
-        } catch (e: IOException) {
-            ""
-        }
-
     companion object {
         /** verge 的固定备份目录,与其保持一致以共用云端历史 */
         const val DEFAULT_REMOTE_DIRECTORY = "clash-verge-rev-backup"
@@ -319,27 +325,21 @@ class WebDavClient(
         private const val METHOD_GET = "GET"
         private const val METHOD_PUT = "PUT"
         private const val METHOD_DELETE = "DELETE"
-        private const val HEADER_AUTHORIZATION = "Authorization"
-        private const val HEADER_USER_AGENT = "User-Agent"
-        private const val HEADER_DEPTH = "Depth"
-        private const val HEADER_CONTENT_TYPE = "Content-Type"
         private const val CONTENT_TYPE_XML = "application/xml; charset=utf-8"
         private const val BODY_ALREADY_EXISTS = "already exist"
 
-        private const val HTTP_OK = HttpURLConnection.HTTP_OK
-        private const val HTTP_METHOD_NOT_ALLOWED = HttpURLConnection.HTTP_BAD_METHOD
-        private const val HTTP_FORBIDDEN = HttpURLConnection.HTTP_FORBIDDEN
-        private const val HTTP_CONFLICT = HttpURLConnection.HTTP_CONFLICT
-
-        // HttpURLConnection 无 207 常量
+        private const val HTTP_OK = 200
         private const val HTTP_MULTI_STATUS = 207
+        private const val HTTP_METHOD_NOT_ALLOWED = 405
+        private const val HTTP_FORBIDDEN = 403
+        private const val HTTP_CONFLICT = 409
         private val HTTP_SUCCESS = 200..299
 
-        /** 列表/删除类操作超时(与 verge 一致) */
-        private const val TIMEOUT_FAST_MS = 30_000
+        /** 列表/删除类操作超时秒数(与 verge 一致) */
+        private const val TIMEOUT_FAST_SECONDS = 30
 
-        /** 上传/下载超时(与 verge 一致) */
-        private const val TIMEOUT_TRANSFER_MS = 300_000
+        /** 上传/下载超时秒数(与 verge 一致) */
+        private const val TIMEOUT_TRANSFER_SECONDS = 300
         private const val MAX_UPLOAD_RETRIES = 1
         private const val RETRY_DELAY_MS = 500L
 
@@ -355,11 +355,3 @@ class WebDavClient(
         private const val ELEMENT_COLLECTION = "collection"
     }
 }
-
-/** 执行后断开连接。备份操作低频,不值得为保活引入连接池心智负担。 */
-private inline fun <T : HttpURLConnection, R> T.useConnection(block: (T) -> R): R =
-    try {
-        block(this)
-    } finally {
-        disconnect()
-    }

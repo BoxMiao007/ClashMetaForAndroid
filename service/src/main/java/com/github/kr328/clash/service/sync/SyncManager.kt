@@ -433,7 +433,7 @@ class SyncManager(
     }
 
     private fun newClient(store: SyncStore): WebDavClient =
-        WebDavClient(store.webdavUrl, store.webdavUsername, store.webdavPassword)
+        WebDavClient(store.webdavUrl, store.webdavUsername, store.webdavPassword, context.cacheDir)
 
     // ---- providers 与云端条目的对应关系 ----
 
