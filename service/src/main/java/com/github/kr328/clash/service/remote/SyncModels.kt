@@ -2,12 +2,24 @@ package com.github.kr328.clash.service.remote
 
 import android.os.Parcel
 import android.os.Parcelable
+import com.github.kr328.clash.common.sync.SyncKey
 import com.github.kr328.clash.core.util.Parcelizer
 import kotlinx.serialization.Serializable
 
 /** [SyncOutcome.conflicts] 与 [SyncChoice] 里 SyncKey 的种类,对齐 common/sync 的 SyncKey.Kind。 */
 const val SYNC_KEY_KIND_URL = 0
 const val SYNC_KEY_KIND_NAME = 1
+
+/**
+ * [SyncKey.Kind] ↔ [SYNC_KEY_KIND_URL]/[SYNC_KEY_KIND_NAME] 整数的唯一换算处:
+ * [SyncChoice]/[SyncConflict] 的跨进程往返与快照 JSON 持久化(SnapshotStore)共用,
+ * 勿在其他位置手写映射。
+ */
+fun SyncKey.Kind.toKeyKindInt(): Int =
+    if (this == SyncKey.Kind.URL) SYNC_KEY_KIND_URL else SYNC_KEY_KIND_NAME
+
+fun Int.toSyncKeyKind(): SyncKey.Kind =
+    if (this == SYNC_KEY_KIND_URL) SyncKey.Kind.URL else SyncKey.Kind.NAME
 
 /** 云端备份包条目(云端历史列表的一行,数据来自 service/webdav 的 CloudBackup)。 */
 @Serializable

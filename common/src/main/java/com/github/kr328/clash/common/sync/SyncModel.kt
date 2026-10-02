@@ -59,6 +59,28 @@ class LocalProfile(
 /** 订阅的同步键:远程订阅按 URL,文件型按名称(来自共享笔记 00 的匹配规则)。 */
 data class SyncKey(val kind: Kind, val value: String) {
     enum class Kind { URL, NAME }
+
+    companion object {
+        /**
+         * 本机订阅的同步键:URL 型取订阅地址、FILE 型取名称(键规则的唯一实现)。
+         * URL 型缺地址返回 null——该订阅不参与同步,由调用方跳过。
+         */
+        fun of(type: LocalType, url: String?, name: String): SyncKey? = when (type) {
+            LocalType.URL -> url?.let { SyncKey(Kind.URL, it) }
+            LocalType.FILE -> SyncKey(Kind.NAME, name)
+        }
+
+        /**
+         * 云端条目(verge)的同步键:remote 取 URL、local 取名称(与 [of] 同一规则)。
+         * merge/script 等增强条目或名称/地址缺失的残缺条目返回 null——不参与同步,
+         * 原样随包保留。
+         */
+        fun of(item: VergeItem): SyncKey? = when (item.type) {
+            "remote" -> item.url?.let { SyncKey(Kind.URL, it) }
+            "local" -> item.name?.let { SyncKey(Kind.NAME, it) }
+            else -> null
+        }
+    }
 }
 
 /**

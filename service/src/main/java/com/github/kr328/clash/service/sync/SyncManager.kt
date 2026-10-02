@@ -22,11 +22,11 @@ import com.github.kr328.clash.service.data.ImportedDao
 import com.github.kr328.clash.service.model.Profile
 import com.github.kr328.clash.service.remote.ISyncManager
 import com.github.kr328.clash.service.remote.CloudBackupInfo
-import com.github.kr328.clash.service.remote.SYNC_KEY_KIND_NAME
-import com.github.kr328.clash.service.remote.SYNC_KEY_KIND_URL
 import com.github.kr328.clash.service.remote.SyncChoice
 import com.github.kr328.clash.service.remote.SyncConflict
 import com.github.kr328.clash.service.remote.SyncOutcome
+import com.github.kr328.clash.service.remote.toKeyKindInt
+import com.github.kr328.clash.service.remote.toSyncKeyKind
 import com.github.kr328.clash.service.util.directoryLastModified
 import com.github.kr328.clash.service.util.generateProfileUUID
 import com.github.kr328.clash.service.util.importedDir
@@ -119,10 +119,8 @@ class SyncManager(
 
             val plan = round.plan.resolve(
                 choices.associate {
-                    SyncKey(
-                        if (it.keyKind == SYNC_KEY_KIND_URL) SyncKey.Kind.URL else SyncKey.Kind.NAME,
-                        it.keyValue,
-                    ) to if (it.useLocal) ConflictChoice.USE_LOCAL else ConflictChoice.USE_CLOUD
+                    SyncKey(it.keyKind.toSyncKeyKind(), it.keyValue) to
+                        if (it.useLocal) ConflictChoice.USE_LOCAL else ConflictChoice.USE_CLOUD
                 }
             )
 
@@ -169,16 +167,12 @@ class SyncManager(
             }
 
             // 2) 按云端包条目逐个离线导入(与同步导入同一实现);增强条目与残缺条目
-            //    不落为本机订阅,原样留在包里(与 SyncPlanner.indexCloud 的取舍一致)
+            //    不落为本机订阅,原样留在包里
             val restored = mutableListOf<String>()
             val fingerprints = LinkedHashMap<SyncKey, String>()
 
             for (item in backup.items) {
-                val key = when (item.type) {
-                    "remote" -> item.url?.let { SyncKey(SyncKey.Kind.URL, it) }
-                    "local" -> item.name?.let { SyncKey(SyncKey.Kind.NAME, it) }
-                    else -> null
-                } ?: continue
+                val key = SyncKey.of(item) ?: continue
 
                 // 包内重复键与同步(plan 对重复键快速失败)同口径,拒绝含糊导入
                 require(key !in fingerprints) { "云端包内存在重复键的订阅条目: $key" }
@@ -243,7 +237,7 @@ class SyncManager(
                         url = action.url,
                         item = action.cloudItem,
                         content = action.content,
-                        providers = providersOf(plan, action),
+                        providers = providersOf(plan.newCloudState, action.cloudItem.file),
                     )
 
                     imported += displayName(action)
@@ -404,11 +398,7 @@ class SyncManager(
                 Profile.Type.External -> continue
             }
             val url = imported.source.takeIf { type == LocalType.URL && it.isNotBlank() }
-            // 键的推导与 SyncPlanner.indexLocals 一致;URL 型缺地址则不参与同步
-            val key = when (type) {
-                LocalType.URL -> url?.let { SyncKey(SyncKey.Kind.URL, it) } ?: continue
-                LocalType.FILE -> SyncKey(SyncKey.Kind.NAME, imported.name)
-            }
+            val key = SyncKey.of(type, url, imported.name) ?: continue
 
             locals += LocalProfile(
                 name = imported.name,
@@ -447,17 +437,10 @@ class SyncManager(
 
     // ---- providers 与云端条目的对应关系 ----
 
-    /** 导入的 providers:云端 extraFiles 中该条目内容文件名对应的前缀下全部文件。 */
-    private fun providersOf(plan: SyncPlan, action: PlanAction.Import): Map<String, ByteArray> {
-        val file = action.cloudItem.file ?: return emptyMap()
-        val prefix = PROVIDERS_PREFIX + file + "/"
-
-        return plan.newCloudState.extraFiles
-            .filterKeys { it.startsWith(prefix) }
-            .mapKeys { it.key.removePrefix(prefix) }
-    }
-
-    /** 恢复的 providers:指定备份包内该条目内容文件名对应的前缀下全部文件。 */
+    /**
+     * 条目的 providers:备份包 extraFiles 中该条目内容文件名对应前缀下的全部文件
+     * (同步导入取计划的新云端状态,历史恢复取备份包本身)。
+     */
     private fun providersOf(backup: VergeBackup, file: String?): Map<String, ByteArray> {
         file ?: return emptyMap()
         val prefix = PROVIDERS_PREFIX + file + "/"
@@ -467,14 +450,9 @@ class SyncManager(
             .mapKeys { it.key.removePrefix(prefix) }
     }
 
-    /** 推送目标条目在云端包内的内容文件名(与 SyncPlanner 的键索引规则一致)。 */
+    /** 推送目标条目在云端包内的内容文件名(条目键规则见 [SyncKey.of])。 */
     private fun findCloudFile(backup: VergeBackup, key: SyncKey): String? =
-        backup.items.firstOrNull { item ->
-            when (key.kind) {
-                SyncKey.Kind.URL -> item.type == "remote" && item.url == key.value
-                SyncKey.Kind.NAME -> item.type == "local" && item.name == key.value
-            }
-        }?.file
+        backup.items.firstOrNull { SyncKey.of(it) == key }?.file
 
     // ---- 答复构造 ----
 
@@ -491,7 +469,7 @@ class SyncManager(
         deletedCloud = plan.actions.filterIsInstance<PlanAction.DeleteCloud>().map(::displayName),
         conflicts = conflicts.map {
             SyncConflict(
-                keyKind = if (it.key.kind == SyncKey.Kind.URL) SYNC_KEY_KIND_URL else SYNC_KEY_KIND_NAME,
+                keyKind = it.key.kind.toKeyKindInt(),
                 keyValue = it.key.value,
                 localName = it.localName,
                 cloudName = it.cloudName,

@@ -4,6 +4,8 @@ import android.content.Context
 import com.github.kr328.clash.common.log.Log
 import com.github.kr328.clash.common.sync.SyncKey
 import com.github.kr328.clash.common.sync.SyncSnapshot
+import com.github.kr328.clash.service.remote.toKeyKindInt
+import com.github.kr328.clash.service.remote.toSyncKeyKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -29,12 +31,7 @@ class SnapshotStore(context: Context) {
 
             for (i in 0 until keys.length()) {
                 val item = keys.getJSONObject(i)
-                val kind = if (item.getInt("kind") == SYNC_KEY_KIND_URL) {
-                    SyncKey.Kind.URL
-                } else {
-                    SyncKey.Kind.NAME
-                }
-
+                val kind = item.getInt("kind").toSyncKeyKind()
 
                 fingerprints[SyncKey(kind, item.getString("value"))] = item.getString("fingerprint")
             }
@@ -54,7 +51,7 @@ class SnapshotStore(context: Context) {
         for ((key, fingerprint) in snapshot.fingerprints) {
             keys.put(
                 JSONObject()
-                    .put("kind", if (key.kind == SyncKey.Kind.URL) SYNC_KEY_KIND_URL else SYNC_KEY_KIND_NAME)
+                    .put("kind", key.kind.toKeyKindInt())
                     .put("value", key.value)
                     .put("fingerprint", fingerprint)
             )
@@ -69,11 +66,5 @@ class SnapshotStore(context: Context) {
 
             throw IOException("写入同步快照失败: $file")
         }
-    }
-
-    private companion object {
-        // 与 remote/SyncModels.kt 的 SYNC_KEY_KIND_* 保持一致(跨模块不引 service.remote)
-        const val SYNC_KEY_KIND_URL = 0
-        const val SYNC_KEY_KIND_NAME = 1
     }
 }

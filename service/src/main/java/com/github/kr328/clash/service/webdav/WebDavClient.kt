@@ -1,6 +1,7 @@
 package com.github.kr328.clash.service.webdav
 
 import android.util.Base64
+import com.github.kr328.clash.common.sync.BackupFileName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -224,7 +225,8 @@ class WebDavClient(
                                 fileNameFromHref(raw)?.let { name ->
                                     result += CloudBackup(
                                         name = name,
-                                        fileTimeMillis = CloudBackup.parseFileNameTime(name),
+                                        fileTimeMillis = BackupFileName.parseTimestampSeconds(name)
+                                            ?.times(1000L),
                                         lastModifiedMillis = lastModified?.let {
                                             CloudBackup.parseServerDate(it)
                                         },

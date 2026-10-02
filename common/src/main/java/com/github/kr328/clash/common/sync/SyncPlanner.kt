@@ -1,7 +1,6 @@
 package com.github.kr328.clash.common.sync
 
 import java.security.MessageDigest
-import java.util.Calendar
 
 /**
  * 同步计划器:纯逻辑,无 Android、无网络依赖。
@@ -274,15 +273,11 @@ object SyncPlanner {
 
     // ---- 键索引 ----
 
-    /** 云端订阅条目:remote 按 URL、local 按名称;增强条目与残缺条目不参与同步,原样随包保留。 */
+    /** 云端订阅条目索引(键规则见 [SyncKey.of]);残缺条目不参与同步,原样随包保留。 */
     private fun indexCloud(cloud: VergeBackup): Map<SyncKey, CloudRef> {
         val map = LinkedHashMap<SyncKey, CloudRef>()
         for (item in cloud.items) {
-            val key = when (item.type) {
-                "remote" -> item.url?.let { SyncKey(SyncKey.Kind.URL, it) }
-                "local" -> item.name?.let { SyncKey(SyncKey.Kind.NAME, it) }
-                else -> null
-            } ?: continue
+            val key = SyncKey.of(item) ?: continue
             val content = item.file?.let { cloud.contentFiles[it] }
             val ref = CloudRef(item, content, fingerprint(content ?: ByteArray(0)))
             require(key !in map) { "云端包内存在重复键的订阅条目: $key" }
@@ -294,10 +289,7 @@ object SyncPlanner {
     private fun indexLocals(locals: Collection<LocalProfile>): Map<SyncKey, LocalProfile> {
         val map = LinkedHashMap<SyncKey, LocalProfile>()
         for (local in locals) {
-            val key = when (local.type) {
-                LocalType.URL -> local.url?.let { SyncKey(SyncKey.Kind.URL, it) }
-                LocalType.FILE -> SyncKey(SyncKey.Kind.NAME, local.name)
-            } ?: continue
+            val key = SyncKey.of(local.type, local.url, local.name) ?: continue
             require(key !in map) { "本机存在重复键的订阅: $key" }
             map[key] = local
         }
@@ -311,7 +303,6 @@ object SyncPlanner {
         val fingerprint: String,
     )
 
-
     /**
      * 清理选择:从云端目录的备份包文件名里挑出应删除的自产旧包。
      *
@@ -324,7 +315,7 @@ object SyncPlanner {
     ): List<String> {
         val selfProduced = filenames.mapNotNull { name ->
             if (!name.startsWith(SELF_BACKUP_PREFIX)) return@mapNotNull null
-            val timestamp = parseFileNameTimestamp(name)
+            val timestamp = BackupFileName.parseTimestampSeconds(name)
             // 时间戳解析失败的文件无法判定新旧,宁可不删
             timestamp?.let { name to it }
         }
@@ -337,20 +328,4 @@ object SyncPlanner {
     }
 
     private const val SELF_BACKUP_PREFIX = "android-backup-"
-
-    /** 解析 `android-backup-<yyyy-MM-dd_HH-mm-ss>.zip` 内的时间戳为秒级 Unix 时间;失败返回 null。 */
-    private fun parseFileNameTimestamp(filename: String): Long? {
-        val base = filename.removePrefix(SELF_BACKUP_PREFIX).removeSuffix(".zip")
-        val parts = base.split('_', '-', '-')
-        if (parts.size != 6) return null
-        val numbers = parts.map { it.toLongOrNull() }
-        if (numbers.any { it == null }) return null
-        val (year, month, day, hour, minute) = numbers.take(5).map { it!!.toInt() }
-        val second = numbers[5]!!.toInt()
-        // 与 verge 一致用本地时区:文件名时间戳是生成端的本地时间
-        return Calendar.getInstance().apply {
-            clear()
-            set(year, month - 1, day, hour, minute, second)
-        }.timeInMillis / 1000
-    }
 }
