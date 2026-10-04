@@ -420,4 +420,5 @@
     <string name="cloud_backup_delete_confirm_title">Delete Backup</string>
     <string name="cloud_backup_delete_confirm_message">Delete %1$s from the cloud? Other backups are not affected.</string>
     <string name="cloud_backup_deleted">Deleted</string>
+    <string name="sync_result_title">Sync Result</string>
 </resources>

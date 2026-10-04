@@ -329,4 +329,5 @@
     <string name="cloud_backup_delete_confirm_title">删除备份包</string>
     <string name="cloud_backup_delete_confirm_message">确定删除云端备份包 %1$s？不影响其他备份包。</string>
     <string name="cloud_backup_deleted">已删除</string>
+    <string name="sync_result_title">同步结果</string>
 </resources>

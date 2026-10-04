@@ -37,7 +37,29 @@
                     android:layout_height="wrap_content"
                     android:layout_alignParentStart="true"
                     android:layout_centerVertical="true"
-                    android:layout_toStartOf="@id/update_layout" />
+                    android:layout_toStartOf="@id/sync_layout" />
+
+                <FrameLayout
+                    android:id="@+id/sync_layout"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_centerVertical="true"
+                    android:layout_toStartOf="@id/update_layout">
+
+                    <ImageView
+                        android:id="@+id/sync_view"
+                        android:layout_width="@dimen/item_tailing_component_size"
+                        android:layout_height="@dimen/item_tailing_component_size"
+                        android:layout_gravity="end|center_vertical"
+                        android:layout_marginStart="@dimen/item_tailing_margin"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:clickable="true"
+                        android:contentDescription="@string/sync"
+                        android:focusable="true"
+                        android:onClick="@{() -> self.requestSync()}"
+                        android:padding="@dimen/toolbar_image_action_padding"
+                        android:src="@drawable/ic_baseline_cloud_download" />
+                </FrameLayout>
 
                 <FrameLayout
                     android:id="@+id/update_layout"
@@ -54,12 +76,11 @@
                         android:layout_marginStart="@dimen/item_tailing_margin"
                         android:background="?attr/selectableItemBackgroundBorderless"
                         android:clickable="true"
-                        android:contentDescription="@string/_new"
+                        android:contentDescription="@string/update_all"
                         android:focusable="true"
                         android:onClick="@{() -> self.requestUpdateAll()}"
                         android:padding="@dimen/toolbar_image_action_padding"
-                        android:src="@drawable/ic_baseline_sync"
-                        android:visibility="gone" />
+                        android:src="@drawable/ic_baseline_sync" />
                 </FrameLayout>
 
                 <ImageView

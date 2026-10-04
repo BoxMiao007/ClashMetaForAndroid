@@ -19,6 +19,7 @@ import kotlinx.coroutines.withContext
 class ProfilesDesign(context: Context) : Design<ProfilesDesign.Request>(context) {
     sealed class Request {
         object UpdateAll : Request()
+        object Sync : Request()
         object Create : Request()
         data class Active(val profile: Profile) : Request()
         data class Update(val profile: Profile) : Request()
@@ -44,14 +45,6 @@ class ProfilesDesign(context: Context) : Design<ProfilesDesign.Request>(context)
     suspend fun patchProfiles(profiles: List<Profile>) {
         adapter.apply {
             patchDataSet(this::profiles, profiles, id = { it.uuid })
-        }
-
-        val updatable = withContext(Dispatchers.Default) {
-            profiles.any { it.imported && it.type != Profile.Type.File }
-        }
-
-        withContext(Dispatchers.Main) {
-            binding.updateView.visibility = if (updatable) View.VISIBLE else View.GONE
         }
     }
 
@@ -105,6 +98,27 @@ class ProfilesDesign(context: Context) : Design<ProfilesDesign.Request>(context)
 
     fun requestCreate() {
         requests.trySend(Request.Create)
+    }
+
+    fun requestSync() {
+        syncRunning = true
+        changeSyncButtonStatus()
+        requests.trySend(Request.Sync)
+    }
+
+    fun finishSync() {
+        syncRunning = false
+        changeSyncButtonStatus()
+    }
+
+    private var syncRunning = false
+
+    private fun changeSyncButtonStatus() {
+        if (syncRunning) {
+            binding.syncView.startAnimation(rotateAnimation)
+        } else {
+            binding.syncView.clearAnimation()
+        }
     }
 
     private fun requestActive(profile: Profile) {
