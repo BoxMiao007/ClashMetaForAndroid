@@ -5,12 +5,13 @@ import com.github.kr328.kaidl.BinderInterface
 /**
  * 手动同步引擎的跨进程接口(实现在 service 进程,见 service/sync/SyncManager)。
  *
+ * 同步方向取自同步设置(双向 / 单向覆盖 / 单向只增),手动与自动同步共用。
  * 两段式流程:
- * 1. [start]:读取本机订阅与云端状态,生成同步计划。无冲突且无删除时直接执行完
- *    并返回 [SyncOutcome.PHASE_DONE];有冲突返回 [SyncOutcome.PHASE_CONFLICTS],
- *    计划含删除动作返回 [SyncOutcome.PHASE_CONFIRM_DELETIONS],两种情况都把
- *    待续计划留在引擎里,等待 [resolve]。
- * 2. [resolve]:按用户对冲突/删除确认的选择继续执行,返回 [SyncOutcome.PHASE_DONE]。
+ * 1. [start]:读取本机订阅与云端状态,按方向生成同步计划。无需确认时直接执行完
+ *    并返回 [SyncOutcome.PHASE_DONE];有冲突(仅双向)返回 [SyncOutcome.PHASE_CONFLICTS],
+ *    计划含删除或覆盖返回 [SyncOutcome.PHASE_CONFIRM_CHANGES],两种情况都把
+ *    待续计划留在引擎里,等待 [resolve]。来源端为空的保护性拒绝直接以失败答复返回。
+ * 2. [resolve]:按用户对冲突/变更确认的选择继续执行,返回 [SyncOutcome.PHASE_DONE]。
  *
  * 同一时刻只允许一轮同步:并发请求以「正在进行中」失败答复。
  */

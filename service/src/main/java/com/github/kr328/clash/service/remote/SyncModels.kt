@@ -71,6 +71,31 @@ data class SyncConflict(
     }
 }
 
+/** 单向同步里「将被覆盖」的一条订阅(计划器 Overwrite 的跨进程形态)。 */
+@Serializable
+data class SyncOverwrite(
+    val keyKind: Int,
+    val keyValue: String,
+    // 执行后保留的名称(来源端)
+    val name: String?,
+    // true = 保留本机版本覆盖云端;false = 保留云端版本覆盖本机
+    val keptLocal: Boolean,
+) : Parcelable {
+    override fun writeToParcel(parcel: Parcel, flags: Int) {
+        Parcelizer.encodeToParcel(serializer(), parcel, this)
+    }
+
+    override fun describeContents(): Int = 0
+
+    companion object CREATOR : Parcelable.Creator<SyncOverwrite> {
+        override fun createFromParcel(parcel: Parcel): SyncOverwrite {
+            return Parcelizer.decodeFromParcel(serializer(), parcel)
+        }
+
+        override fun newArray(size: Int): Array<SyncOverwrite?> = arrayOfNulls(size)
+    }
+}
+
 /** 用户对一条冲突的选择(true = 用本地,false = 用云端)。 */
 @Serializable
 data class SyncChoice(
@@ -98,10 +123,11 @@ data class SyncChoice(
  *
  * [phase] 决定后续动作:
  * - [PHASE_DONE]:本轮已结束,看 [succeeded] 与 [message](失败原因,可直接展示);
- * - [PHASE_CONFLICTS]:存在待选冲突,用户逐条选择后经 ISyncManager.resolve 继续执行;
- * - [PHASE_CONFIRM_DELETIONS]:计划包含删除动作,需用户确认后经 ISyncManager.resolve 继续。
+ * - [PHASE_CONFLICTS]:存在待选冲突(仅双向模式),用户逐条选择后经 ISyncManager.resolve 继续;
+ * - [PHASE_CONFIRM_CHANGES]:计划包含删除或覆盖,需用户确认后经 ISyncManager.resolve 继续。
  *
  * 各名称列表在 PHASE_DONE 时为实际发生的结果,在两个待续阶段为将要发生的内容。
+ * [overwrites] 是单向模式的「将被覆盖」清单(双向模式恒为空),用于确认弹窗。
  */
 @Serializable
 data class SyncOutcome(
@@ -113,6 +139,7 @@ data class SyncOutcome(
     val deletedLocal: List<String> = emptyList(),
     val deletedCloud: List<String> = emptyList(),
     val conflicts: List<SyncConflict> = emptyList(),
+    val overwrites: List<SyncOverwrite> = emptyList(),
 ) : Parcelable {
     override fun writeToParcel(parcel: Parcel, flags: Int) {
         Parcelizer.encodeToParcel(serializer(), parcel, this)
@@ -123,7 +150,7 @@ data class SyncOutcome(
     companion object CREATOR : Parcelable.Creator<SyncOutcome> {
         const val PHASE_DONE = 0
         const val PHASE_CONFLICTS = 1
-        const val PHASE_CONFIRM_DELETIONS = 2
+        const val PHASE_CONFIRM_CHANGES = 2
 
         override fun createFromParcel(parcel: Parcel): SyncOutcome {
             return Parcelizer.decodeFromParcel(serializer(), parcel)

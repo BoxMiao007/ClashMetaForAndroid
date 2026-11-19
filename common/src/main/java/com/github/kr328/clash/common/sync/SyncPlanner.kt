@@ -5,9 +5,10 @@ import java.security.MessageDigest
 /**
  * 同步计划器:纯逻辑,无 Android、无网络依赖。
  *
- * 输入本机订阅集合、云端状态([VergeBackup])与上次同步快照,输出同步计划
- * (导入/推送/删本机/删云端/冲突列表)、同步后的新云端状态与新快照。
- * 语义来自共享笔记 00「同步语义(定稿)」,不得偏离。
+ * 输入本机订阅集合、云端状态([VergeBackup])、上次同步快照与同步方向([SyncMode]),
+ * 输出同步计划(导入/推送/删本机/删云端/冲突列表/覆盖清单/拒绝原因)、
+ * 同步后的新云端状态与新快照。双向语义来自共享笔记 00「同步语义(定稿)」;
+ * 单向模式以来源端为准,不看快照、不产生冲突。
  *
  * 快照指基线:plan() 产出的新快照假设计划会被完整执行且推送成功(「成功同步后才
  * 更新快照」由调用方保证——执行失败时丢弃产出、保留旧快照)。
@@ -23,14 +24,18 @@ object SyncPlanner {
      * 生成同步计划。
      *
      * @param locals 本机订阅集合;键(URL/名称)重复视为调用方数据错误,快速失败
-     * @param cloud 云端状态(同步目录最新备份包)
-     * @param snapshot 上次同步快照;null = 首次同步
+     * @param cloud 云端状态(同步目录最新备份包);目录里没有任何备份包时传空云端并置
+     *   [cloudBackupExists] = false,单向模式据此拒绝执行而不是把本机清空
+     * @param snapshot 上次同步快照;null = 首次同步。单向模式不使用快照(以来源端为准)
+     * @param mode 同步方向;默认双向,保持既有调用点行为不变
      */
     fun plan(
         locals: Collection<LocalProfile>,
         cloud: VergeBackup,
         snapshot: SyncSnapshot?,
-    ): SyncPlan = compute(locals, cloud, snapshot, emptyMap())
+        mode: SyncMode = SyncMode.BIDIRECTIONAL,
+        cloudBackupExists: Boolean = true,
+    ): SyncPlan = compute(locals, cloud, snapshot, mode, cloudBackupExists, emptyMap())
 
     /**
      * @param overrides 冲突的用户选择(resolve 重算时非空;键缺选择按保留云端计)
@@ -39,6 +44,8 @@ object SyncPlanner {
         locals: Collection<LocalProfile>,
         cloud: VergeBackup,
         snapshot: SyncSnapshot?,
+        mode: SyncMode,
+        cloudBackupExists: Boolean,
         overrides: Map<SyncKey, ConflictChoice>,
     ): SyncPlan {
         locals.forEach {
@@ -49,6 +56,53 @@ object SyncPlanner {
         val localByKey = indexLocals(locals)
         val cloudByKey = indexCloud(cloud)
 
+        // 空来源保护:单向模式下来源端没有可参与同步的订阅时拒绝执行。
+        // 否则一次「覆盖」就会把对端清空(云端还没备份包、或本机刚重装还没有订阅)。
+        refusalReason(mode, cloudBackupExists, localByKey, cloudByKey)?.let { reason ->
+            return SyncPlan(
+                mode, emptyList(), emptyList(), emptyList(), reason,
+                cloud, SyncSnapshot(emptyMap()),
+            ) { choices -> compute(locals, cloud, snapshot, mode, cloudBackupExists, choices) }
+        }
+
+        return if (mode.oneWay) {
+            computeOneWay(mode, cloud, localByKey, cloudByKey)
+        } else {
+            computeBidirectional(mode, cloud, snapshot, localByKey, cloudByKey, overrides)
+        }
+    }
+
+    /** 单向模式的空来源判定;返回 null 表示可执行。双向模式永远可执行。 */
+    private fun refusalReason(
+        mode: SyncMode,
+        cloudBackupExists: Boolean,
+        localByKey: Map<SyncKey, LocalProfile>,
+        cloudByKey: Map<SyncKey, CloudRef>,
+    ): String? = when {
+        !mode.oneWay -> null
+        // 云端→本机:连备份包都没有,或包里没有可同步的订阅条目 → 拒绝,免得清空本机
+        !mode.sourceIsLocal && !cloudBackupExists ->
+            "云端还没有备份包,已取消同步(避免清空本机订阅)"
+        !mode.sourceIsLocal && cloudByKey.isEmpty() ->
+            "云端备份包里没有可同步的订阅,已取消同步(避免清空本机订阅)"
+        // 本机→云端(覆盖):本机没有可同步订阅 → 会把云端清掉
+        mode == SyncMode.LOCAL_TO_CLOUD_MIRROR && localByKey.isEmpty() ->
+            "本机没有可同步的订阅,已取消同步(避免清空云端订阅)"
+        else -> null
+    }
+
+    /**
+     * 双向计划:并集合并 + 删除传播 + 冲突待选(既有语义,与 v1 一致)。
+     * 导入以本机为准更新时带 [PlanAction.Import.existing],执行时就地改写而不是新建订阅。
+     */
+    private fun computeBidirectional(
+        mode: SyncMode,
+        cloud: VergeBackup,
+        snapshot: SyncSnapshot?,
+        localByKey: Map<SyncKey, LocalProfile>,
+        cloudByKey: Map<SyncKey, CloudRef>,
+        overrides: Map<SyncKey, ConflictChoice>,
+    ): SyncPlan {
         val actions = ArrayList<PlanAction>()
         val conflicts = ArrayList<Conflict>()
         val newSnapshotFps = LinkedHashMap<SyncKey, String>()
@@ -99,7 +153,9 @@ object SyncPlanner {
                                 applyPushToExisting(newItems, newContentFiles, key, ref, local)
                                 newSnapshotFps[key] = local.contentFingerprint
                             } else {
-                                actions += PlanAction.Import(key, ref.item.name, ref.item.url, ref.item, ref.content)
+                                actions += PlanAction.Import(
+                                    key, ref.item.name, ref.item.url, ref.item, ref.content, local,
+                                )
                                 newSnapshotFps[key] = ref.fingerprint
                             }
                         }
@@ -111,7 +167,9 @@ object SyncPlanner {
                             newSnapshotFps[key] = local.contentFingerprint
                         }
                         local.contentFingerprint == baseline && ref.fingerprint != baseline -> {
-                            actions += PlanAction.Import(key, ref.item.name, ref.item.url, ref.item, ref.content)
+                            actions += PlanAction.Import(
+                                key, ref.item.name, ref.item.url, ref.item, ref.content, local,
+                            )
                             newSnapshotFps[key] = ref.fingerprint
                         }
 
@@ -123,7 +181,9 @@ object SyncPlanner {
                                 newSnapshotFps[key] = local.contentFingerprint
                             }
                             ConflictChoice.USE_CLOUD -> {
-                                actions += PlanAction.Import(key, ref.item.name, ref.item.url, ref.item, ref.content)
+                                actions += PlanAction.Import(
+                                    key, ref.item.name, ref.item.url, ref.item, ref.content, local,
+                                )
                                 newSnapshotFps[key] = ref.fingerprint
                             }
                             // 未解析(初次 plan):登记冲突待选;试算产出按保留云端计
@@ -143,11 +203,100 @@ object SyncPlanner {
         }
 
         return SyncPlan(
+            mode,
             actions,
             conflicts,
+            emptyList(),
+            null,
             cloud.copy(items = newItems, contentFiles = newContentFiles, current = newCurrent.value),
             SyncSnapshot(newSnapshotFps),
-        ) { choices -> compute(locals, cloud, snapshot, choices) }
+        ) { choices -> computeBidirectional(mode, cloud, snapshot, localByKey, cloudByKey, choices) }
+    }
+
+    /**
+     * 单向计划:以来源端为准,不读快照、不产生冲突。
+     *
+     * 覆盖模式删除对端独有条目;只增模式把对端独有条目原样保留。
+     * 两端都存在但内容不同 → 取来源端版本,并计入 [Overwrite] 供执行前确认。
+     * 新快照记来源端集合:执行后两端对这些键内容一致,切回双向不会把差异误判成删除。
+     */
+    private fun computeOneWay(
+        mode: SyncMode,
+        cloud: VergeBackup,
+        localByKey: Map<SyncKey, LocalProfile>,
+        cloudByKey: Map<SyncKey, CloudRef>,
+    ): SyncPlan {
+        val actions = ArrayList<PlanAction>()
+        val overwrites = ArrayList<Overwrite>()
+        val newSnapshotFps = LinkedHashMap<SyncKey, String>()
+
+        val newItems = cloud.items.toMutableList()
+        val newContentFiles = LinkedHashMap(cloud.contentFiles)
+        val newCurrent = Box(cloud.current)
+
+        val fromLocal = mode.sourceIsLocal
+        val deletesCounterpart = mode.deletesCounterpart
+
+        for (key in (localByKey.keys + cloudByKey.keys)) {
+            val local = localByKey[key]
+            val ref = cloudByKey[key]
+            when {
+                // 云端独有条目:导入本机(来源=云端)或按覆盖删除云端(来源=本机)
+                local == null && ref != null -> when {
+                    fromLocal && deletesCounterpart -> {
+                        actions += PlanAction.DeleteCloud(key, ref.item.name)
+                        removeCloudItem(newItems, newContentFiles, newCurrent, ref)
+                    }
+                    fromLocal -> Unit
+                    else -> {
+                        actions += PlanAction.Import(key, ref.item.name, ref.item.url, ref.item, ref.content)
+                        newSnapshotFps[key] = ref.fingerprint
+                    }
+                }
+                // 本机独有条目:推送云端(来源=本机)或按覆盖删除本机(来源=云端)
+                local != null && ref == null -> when {
+                    fromLocal -> {
+                        actions += PlanAction.Push(key, local.name, local)
+                        appendPushedItem(newItems, newContentFiles, key, local)
+                        newSnapshotFps[key] = local.contentFingerprint
+                    }
+                    deletesCounterpart -> actions += PlanAction.DeleteLocal(key, local.name)
+                    else -> Unit
+                }
+                local != null && ref != null -> when {
+                    // 两端一致:无需动作,基线即当前指纹
+                    local.contentFingerprint == ref.fingerprint ->
+                        newSnapshotFps[key] = local.contentFingerprint
+
+                    // 内容不同:取来源端版本
+                    fromLocal -> {
+                        actions += PlanAction.Push(key, local.name, local)
+                        applyPushToExisting(newItems, newContentFiles, key, ref, local)
+                        overwrites += Overwrite(key, local.name, keptLocal = true)
+                        newSnapshotFps[key] = local.contentFingerprint
+                    }
+                    else -> {
+                        actions += PlanAction.Import(
+                            key, ref.item.name, ref.item.url, ref.item, ref.content, local,
+                        )
+                        overwrites += Overwrite(key, ref.item.name, keptLocal = false)
+                        newSnapshotFps[key] = ref.fingerprint
+                    }
+                }
+                // 两端索引都不含此键不可能发生(键来自两端索引的并集)
+                else -> Unit
+            }
+        }
+
+        return SyncPlan(
+            mode,
+            actions,
+            emptyList(),
+            overwrites,
+            null,
+            cloud.copy(items = newItems, contentFiles = newContentFiles, current = newCurrent.value),
+            SyncSnapshot(newSnapshotFps),
+        ) { _ -> computeOneWay(mode, cloud, localByKey, cloudByKey) }
     }
 
     /** 删除传播:从新云端状态移除条目与其内容文件;被删条目正是激活订阅时清空 current。 */

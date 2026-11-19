@@ -3,9 +3,10 @@ package com.github.kr328.clash.service.sync
 import android.content.Context
 import com.github.kr328.clash.common.store.Store
 import com.github.kr328.clash.common.store.asStoreProvider
+import com.github.kr328.clash.common.sync.SyncMode
 
 /**
- * WebDAV 同步配置(地址/账号/密码与自动触发开关),存独立 prefs 文件,跨进程读写。
+ * WebDAV 同步配置(地址/账号/密码、同步方向与自动触发开关),存独立 prefs 文件,跨进程读写。
  *
  * url 为空视为未配置同步。
  */
@@ -29,6 +30,21 @@ class SyncStore(context: Context) {
     var webdavPassword: String by store.string(
         key = "webdav_password",
         defaultValue = ""
+    )
+
+    /**
+     * 同步方向:存档为枚举名,未知值(旧版本降级、手改偏好)回退双向,
+     * 换算规则唯一出处是 [SyncMode.ofStorage]。
+     */
+    var syncMode: SyncMode
+        get() = SyncMode.ofStorage(rawSyncMode)
+        set(value) {
+            rawSyncMode = value.name
+        }
+
+    private var rawSyncMode: String by store.string(
+        key = "sync_mode",
+        defaultValue = SyncMode.BIDIRECTIONAL.name
     )
 
     // 自动触发(共享笔记 00 定稿:两个开关默认关;间隔分钟数,预设 30/60/360/720/1440,可自定义)

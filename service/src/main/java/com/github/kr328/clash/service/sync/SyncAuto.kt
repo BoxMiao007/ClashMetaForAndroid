@@ -9,14 +9,14 @@ import com.github.kr328.clash.service.remote.SyncOutcome
 /**
  * 自动触发(启动时/定时)的一轮同步语义(共享笔记 00 定稿):
  * - PHASE_DONE:结束,成功失败都静默,失败仅记日志;
- * - PHASE_CONFIRM_DELETIONS:删除传播是定稿语义、云端历史包可回滚,自动轮不等用户,
- *   以空选择(确认删除)继续执行;
- * - PHASE_CONFLICTS:冲突必须由人选,自动轮作废本轮,留给手动同步。
+ * - PHASE_CONFIRM_CHANGES:删除与覆盖是定稿语义、云端历史包可回滚,自动轮不等用户,
+ *   以空选择(确认执行)继续;
+ * - PHASE_CONFLICTS:冲突必须由人选(仅双向模式),自动轮作废本轮,留给手动同步。
  */
 suspend fun ISyncManager.runAutoRound(trigger: String) {
     var outcome = start()
 
-    while (outcome.phase == SyncOutcome.PHASE_CONFIRM_DELETIONS) {
+    while (outcome.phase == SyncOutcome.PHASE_CONFIRM_CHANGES) {
         outcome = resolve(emptyList())
     }
 

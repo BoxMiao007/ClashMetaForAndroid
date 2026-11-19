@@ -6,8 +6,9 @@ package com.github.kr328.clash.common.sync
  * 本文件只定义数据形态;合并/删除/冲突判定在 [SyncPlanner]。
  * 刻意不依赖 service 模块的 Room/Profile 类型:计划器是纯逻辑,输入输出全部可测。
  *
- * 术语见共享笔记 00:同步 = 本机订阅集合与云端状态([VergeBackup])的双向并集合并,
- * 含删除传播与冲突标记;上次同步快照 = 上次成功同步时两端订阅集合在本机的留底。
+ * 术语见领域术语表:同步 = 本机订阅集合与云端状态([VergeBackup])之间的同步,
+ * 方向由 [SyncMode] 决定(双向并集合并,或单向覆盖/只增);上次同步快照 = 上次成功
+ * 同步时两端订阅集合在本机的留底。
  */
 
 /** 本机订阅类型:URL = 远程订阅(按 url 匹配);FILE = 本地文件(按名称匹配)。 */
@@ -96,8 +97,10 @@ sealed class PlanAction {
     abstract val name: String?
 
     /**
-     * 导入:云端有本机没有(或冲突后用户选了云端)。
+     * 导入:以云端为准写入本机。
      * [content] 直接取自云端备份包,离线导入,不重新联网下载;缺失时为 null。
+     * [existing] 非空表示本机已有同键订阅:执行时就地改写该订阅(保留 uuid)而不是新建,
+     * 避免同一订阅在列表里出现重复;双向与单向模式都适用。
      */
     class Import(
         override val key: SyncKey,
@@ -107,12 +110,14 @@ sealed class PlanAction {
         // 云端条目完整元数据(updated/extra/option 等),供建本机订阅取值
         val cloudItem: VergeItem,
         val content: ByteArray?,
+        val existing: LocalProfile? = null,
     ) : PlanAction() {
         override fun equals(other: Any?) = other is Import &&
             key == other.key && name == other.name && url == other.url &&
-            cloudItem == other.cloudItem && content.contentEquals(other.content)
+            cloudItem == other.cloudItem && content.contentEquals(other.content) &&
+            existing == other.existing
 
-        override fun hashCode() = listOf(key, name, url, cloudItem).hashCode()
+        override fun hashCode() = listOf(key, name, url, cloudItem, existing).hashCode()
     }
 
     /** 推送:本机有云端没有(或冲突后用户选了本地);本机记录已并入 [SyncPlan.newCloudState]。 */
@@ -135,6 +140,18 @@ sealed class PlanAction {
     ) : PlanAction()
 }
 
+/**
+ * 单向同步中「将被覆盖」的一条订阅:两端都存在但内容不同,执行后取来源端版本,
+ * 对端那次改动丢失。与 [Conflict] 互斥:单向模式以来源端为准,不产生冲突。
+ */
+data class Overwrite(
+    val key: SyncKey,
+    // 执行后保留的名称(来源端)
+    val name: String?,
+    // true = 保留本机版本覆盖云端;false = 保留云端版本覆盖本机
+    val keptLocal: Boolean,
+)
+
 /** 冲突:上次同步后两端都改过同一条订阅,待用户选「用本地/用云端」。 */
 data class Conflict(
     val key: SyncKey,
@@ -149,18 +166,29 @@ data class Conflict(
 enum class ConflictChoice { USE_LOCAL, USE_CLOUD }
 
 /**
- * 一次 plan() 的产出:可执行动作、待选冲突、同步后的新云端状态与新快照。
+ * 一次 plan() 的产出:可执行动作、待选冲突、将被覆盖清单、同步后的新云端状态与新快照。
+ *
+ * [refusal] 非空表示本轮不可执行(来源端为空等保护性拒绝):此时没有任何动作,
+ * 调用方直接把原因展示给用户,两端都不动。
  *
  * 存在冲突时,本计划不可直接执行:[newCloudState]/[newSnapshot] 按冲突全部
  * 「保留云端」试算,必须先经 [resolve] 按用户选择得出最终计划。
  */
 class SyncPlan internal constructor(
+    val mode: SyncMode,
     val actions: List<PlanAction>,
     val conflicts: List<Conflict>,
+    val overwrites: List<Overwrite>,
+    val refusal: String?,
     val newCloudState: VergeBackup,
     val newSnapshot: SyncSnapshot,
     private val recompute: (Map<SyncKey, ConflictChoice>) -> SyncPlan,
 ) {
+    /** 是否需要在执行前向用户确认(有删除或有覆盖)。 */
+    val needsConfirmation: Boolean
+        get() = actions.any { it is PlanAction.DeleteLocal || it is PlanAction.DeleteCloud } ||
+            overwrites.isNotEmpty()
+
     /** 按用户选择解析冲突,得出可执行计划;每个冲突都必须给出选择。 */
     fun resolve(choices: Map<SyncKey, ConflictChoice>): SyncPlan {
         val missing = conflicts.filter { it.key !in choices }

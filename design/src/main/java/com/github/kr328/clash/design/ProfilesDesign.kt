@@ -49,6 +49,7 @@ class ProfilesDesign(context: Context) : Design<ProfilesDesign.Request>(context)
             adapter.states.allUpdating = value
         }
     private val rotateAnimation : Animation = AnimationUtils.loadAnimation(context, R.anim.rotate_infinite)
+    private val syncSpinnerAnimation : Animation = AnimationUtils.loadAnimation(context, R.anim.sync_spinner_rotate)
 
     override val root: View
         get() = binding.root
@@ -126,9 +127,14 @@ class ProfilesDesign(context: Context) : Design<ProfilesDesign.Request>(context)
 
     private fun changeSyncButtonStatus() {
         if (syncRunning) {
-            binding.syncView.startAnimation(rotateAnimation)
+            // 云图标缩小让位,外围旋转圆弧表示进行中
+            binding.syncProgressView.visibility = View.VISIBLE
+            binding.syncProgressView.startAnimation(syncSpinnerAnimation)
+            binding.syncView.animate().scaleX(0.7f).scaleY(0.7f).setDuration(150).start()
         } else {
-            binding.syncView.clearAnimation()
+            binding.syncProgressView.clearAnimation()
+            binding.syncProgressView.visibility = View.GONE
+            binding.syncView.animate().scaleX(1f).scaleY(1f).setDuration(150).start()
         }
     }
 
