@@ -7,8 +7,10 @@ import com.github.kr328.clash.common.sync.ConflictChoice
 import com.github.kr328.clash.common.sync.LocalProfile
 import com.github.kr328.clash.common.sync.LocalTraffic
 import com.github.kr328.clash.common.sync.LocalType
+import com.github.kr328.clash.common.sync.Overwrite
 import com.github.kr328.clash.common.sync.PlanAction
 import com.github.kr328.clash.common.sync.SyncKey
+import com.github.kr328.clash.common.sync.SyncMode
 import com.github.kr328.clash.common.sync.SyncPlanner
 import com.github.kr328.clash.common.sync.SyncPlan
 import com.github.kr328.clash.common.sync.SyncSnapshot
@@ -25,6 +27,7 @@ import com.github.kr328.clash.service.remote.CloudBackupInfo
 import com.github.kr328.clash.service.remote.SyncChoice
 import com.github.kr328.clash.service.remote.SyncConflict
 import com.github.kr328.clash.service.remote.SyncOutcome
+import com.github.kr328.clash.service.remote.SyncOverwrite
 import com.github.kr328.clash.service.remote.toKeyKindInt
 import com.github.kr328.clash.service.remote.toSyncKeyKind
 import com.github.kr328.clash.service.util.directoryLastModified
@@ -37,6 +40,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -44,10 +48,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * 手动同步引擎(remote/ISyncManager 的 service 进程实现)。
  *
- * 同步流程:读本机 imported 订阅与云端最新备份包 → SyncPlanner 生成计划 →
- * 无冲突无删除直接执行;有冲突(PHASE_CONFLICTS)或含删除(PHASE_CONFIRM_DELETIONS)
- * 时挂起待续计划,经 resolve 按用户选择继续。所有动作完成后才持久化新快照,
- * 失败/取消保留旧快照(共享笔记 00 定稿语义)。
+ * 同步流程:读本机 imported 订阅与云端最新备份包 → 按设置里的同步方向
+ * ([com.github.kr328.clash.common.sync.SyncMode])交给 SyncPlanner 生成计划 →
+ * 无需确认直接执行;有冲突(PHASE_CONFLICTS,仅双向)或含删除/覆盖
+ * (PHASE_CONFIRM_CHANGES)时挂起待续计划,经 resolve 按用户选择继续。
+ * 来源端为空的保护性拒绝直接以失败答复返回,两端都不动。
+ * 所有动作完成后才持久化新快照,失败/取消保留旧快照(共享笔记 00 定稿语义)。
  *
  * 另实现云端历史管理(票 #7):列表 / 恢复(整体替换本机订阅并重建快照基线,
  * 不经过合并计划)/ 删除单包;恢复与同步共用同一 busy 互斥。
@@ -81,11 +87,20 @@ class SyncManager(
             if (store.webdavUrl.isBlank()) return failed("未配置 WebDAV 服务器地址")
 
             val client = newClient(store)
-            val cloud = fetchCloudState(client)
+            val cloudState = fetchCloudState(client)
             val (locals, localUuids) = readLocals()
             val snapshot = SnapshotStore(context).load()
 
-            val plan = SyncPlanner.plan(locals, cloud, snapshot)
+            val plan = SyncPlanner.plan(
+                locals = locals,
+                cloud = cloudState.backup,
+                snapshot = snapshot,
+                mode = store.syncMode,
+                cloudBackupExists = cloudState.exists,
+            )
+
+            // 保护性拒绝(来源端为空等):原样展示原因,两端都不动
+            plan.refusal?.let { return failed(it) }
 
             return when {
                 plan.conflicts.isNotEmpty() -> {
@@ -93,10 +108,10 @@ class SyncManager(
 
                     outcome(phase = SyncOutcome.PHASE_CONFLICTS, plan = plan, conflicts = plan.conflicts)
                 }
-                plan.containsDeletions() -> {
+                plan.needsConfirmation -> {
                     stateMutex.withLock { pending = PendingRound(plan, localUuids) }
 
-                    outcome(phase = SyncOutcome.PHASE_CONFIRM_DELETIONS, plan = plan)
+                    outcome(phase = SyncOutcome.PHASE_CONFIRM_CHANGES, plan = plan)
                 }
                 else -> execute(plan, localUuids, client)
             }
@@ -231,14 +246,30 @@ class SyncManager(
         for (action in plan.actions) {
             when (action) {
                 is PlanAction.Import -> {
-                    importOffline(
-                        key = action.key,
-                        name = action.name,
-                        url = action.url,
-                        item = action.cloudItem,
-                        content = action.content,
-                        providers = providersOf(plan.newCloudState, action.cloudItem.file),
-                    )
+                    val providers = providersOf(plan.newCloudState, action.cloudItem.file)
+                    val existingUuid = action.existing?.let { localUuids[action.key] }
+
+                    if (existingUuid != null) {
+                        // 本机已有同键订阅:就地改写,保留 uuid、激活状态与自动更新排期
+                        overwriteInPlace(
+                            uuid = existingUuid,
+                            key = action.key,
+                            name = action.name,
+                            url = action.url,
+                            item = action.cloudItem,
+                            content = action.content,
+                            providers = providers,
+                        )
+                    } else {
+                        importOffline(
+                            key = action.key,
+                            name = action.name,
+                            url = action.url,
+                            item = action.cloudItem,
+                            content = action.content,
+                            providers = providers,
+                        )
+                    }
 
                     imported += displayName(action)
                 }
@@ -269,6 +300,7 @@ class SyncManager(
             pushed = pushes.map(::displayName),
             deletedLocal = deletedLocal,
             deletedCloud = deletedCloudActions.map(::displayName),
+            overwrites = overwritesOf(plan.overwrites),
         )
     }
 
@@ -288,22 +320,7 @@ class SyncManager(
         val uuid = generateProfileUUID()
         val dir = context.importedDir.resolve(uuid.toString())
 
-        withContext(Dispatchers.IO) {
-            dir.deleteRecursively()
-            dir.mkdirs()
-            dir.resolve("config.yaml").writeBytes(content ?: ByteArray(0))
-
-            val providersDir = dir.resolve("providers")
-            providersDir.mkdirs()
-
-            for ((fileName, data) in providers) {
-                require(fileName.isNotEmpty() && fileName != "." && fileName != ".." && '/' !in fileName) {
-                    "非法的 provider 文件名: $fileName"
-                }
-
-                providersDir.resolve(fileName).writeBytes(data)
-            }
-        }
+        writeProfileFiles(dir, content, providers)
 
         val row = Imported(
             uuid = uuid,
@@ -323,6 +340,70 @@ class SyncManager(
 
         ProfileReceiver.scheduleNext(context, row)
         context.sendProfileChanged(uuid)
+    }
+
+    /**
+     * 就地改写本机已有订阅(单向覆盖或双向取云端时使用):
+     * 用云端包内容替换 config.yaml 与 providers 目录,保留 uuid、创建时间与 age 密钥,
+     * 更新名称/来源/更新间隔/流量。激活状态因此保持,不需要重新选中订阅。
+     *
+     * 注意:若该订阅存在未提交的编辑草稿(pending),草稿里的名称等展示值仍优先,
+     * 同步本就不处理草稿(与 readLocals 只读 imported 同口径)。
+     */
+    private suspend fun overwriteInPlace(
+        uuid: UUID,
+        key: SyncKey,
+        name: String?,
+        url: String?,
+        item: VergeItem,
+        content: ByteArray?,
+        providers: Map<String, ByteArray>,
+    ) {
+        val imported = ImportedDao().queryByUUID(uuid)
+            ?: throw IllegalStateException("要覆盖的订阅已不存在: $key")
+
+        writeProfileFiles(context.importedDir.resolve(uuid.toString()), content, providers)
+
+        val row = imported.copy(
+            name = name ?: imported.name,
+            type = if (key.kind == SyncKey.Kind.URL) Profile.Type.Url else Profile.Type.File,
+            source = url ?: "",
+            interval = item.option?.updateInterval?.takeIf { it > 0 }
+                ?.let { TimeUnit.MINUTES.toMillis(it) } ?: 0,
+            upload = item.extra?.upload ?: 0,
+            download = item.extra?.download ?: 0,
+            total = item.extra?.total ?: 0,
+            expire = item.extra?.expire ?: 0,
+        )
+
+        ImportedDao().update(row)
+
+        ProfileReceiver.scheduleNext(context, row)
+        context.sendProfileChanged(uuid)
+    }
+
+    /** 落盘一条订阅的内容与 providers(先清旧目录,保证 providers 不残留陈旧文件)。 */
+    private suspend fun writeProfileFiles(
+        dir: File,
+        content: ByteArray?,
+        providers: Map<String, ByteArray>,
+    ) {
+        withContext(Dispatchers.IO) {
+            dir.deleteRecursively()
+            dir.mkdirs()
+            dir.resolve("config.yaml").writeBytes(content ?: ByteArray(0))
+
+            val providersDir = dir.resolve("providers")
+            providersDir.mkdirs()
+
+            for ((fileName, data) in providers) {
+                require(fileName.isNotEmpty() && fileName != "." && fileName != ".." && '/' !in fileName) {
+                    "非法的 provider 文件名: $fileName"
+                }
+
+                providersDir.resolve(fileName).writeBytes(data)
+            }
+        }
     }
 
     /**
@@ -422,14 +503,23 @@ class SyncManager(
         return locals to uuids
     }
 
-    /** 云端状态 = 同步目录最新备份包;目录为空(首次使用)视为空云端。 */
-    private suspend fun fetchCloudState(client: WebDavClient): VergeBackup {
+    /**
+     * 云端状态 = 同步目录最新备份包。
+     * [CloudState.exists] 区分「目录里没有任何备份包」与「有备份包但为空」:
+     * 单向模式在来源端为空时必须拒绝执行,而不是把另一端清空。
+     */
+    private class CloudState(val backup: VergeBackup, val exists: Boolean)
+
+    private suspend fun fetchCloudState(client: WebDavClient): CloudState {
         client.ensureDirectory()
 
         val latest = client.listBackups().firstOrNull()
-            ?: return VergeBackup(null, emptyList(), emptyMap(), emptyMap(), emptyMap())
+            ?: return CloudState(
+                VergeBackup(null, emptyList(), emptyMap(), emptyMap(), emptyMap()),
+                exists = false,
+            )
 
-        return VergeBackupCodec.decode(client.fetchBackup(latest.name))
+        return CloudState(VergeBackupCodec.decode(client.fetchBackup(latest.name)), exists = true)
     }
 
     private fun newClient(store: SyncStore): WebDavClient =
@@ -477,7 +567,18 @@ class SyncManager(
                 cloudUpdatedAt = it.cloudUpdatedAtSeconds,
             )
         },
+        overwrites = overwritesOf(plan.overwrites),
     )
+
+    /** 覆盖清单 → 跨进程形态(确认弹窗与结果提示共用同一份映射)。 */
+    private fun overwritesOf(overwrites: List<Overwrite>): List<SyncOverwrite> = overwrites.map {
+        SyncOverwrite(
+            keyKind = it.key.kind.toKeyKindInt(),
+            keyValue = it.key.value,
+            name = it.name,
+            keptLocal = it.keptLocal,
+        )
+    }
 
     private fun displayName(action: PlanAction): String = action.name ?: action.key.value
 
@@ -491,9 +592,6 @@ class SyncManager(
         succeeded = false,
         message = message,
     )
-
-    private fun SyncPlan.containsDeletions(): Boolean =
-        actions.any { it is PlanAction.DeleteLocal || it is PlanAction.DeleteCloud }
 
     companion object {
         /**

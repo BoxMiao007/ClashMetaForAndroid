@@ -31,18 +31,19 @@ ClashMetaForAndroid(CMFA)——Clash.Meta 内核的 Android 代理客户端。�
 - 一次需求包含多个可独立验证的改动时,先列任务清单再动手,完成一项勾一项,让用户随时看到进度。
 - 用户问"现在什么状态"时,答:已完成什么、在做什么、下一步、卡在哪。
 
-## 构建环境(2026-10-01 搭好;重装或换机照此执行)
+## 构建环境(2026-11-04 换机重建;重装或换机照此执行)
 
 | 组件 | 位置 | 说明 |
 | ---- | ---- | ---- |
-| JDK 21 | `~/.jdks/jdk-21.0.12.1+1` | 经 `~/.gradle/gradle.properties` 的 `org.gradle.java.home` 生效;系统默认 Java 25 会被 Gradle 8.10.2 拒绝 |
-| Android SDK | `~/Android/Sdk` | platforms/android-35、build-tools/34.0.0 与 35.0.0、platform-tools、ndk/29.0.14206865;licenses 已接受;仓库 `local.properties`(gitignored)指向它 |
+| JDK 21 | `~/.jdks/jdk-21.0.13+9` | Temurin zip 解压;经 `~/.gradle/gradle.properties` 的 `org.gradle.java.home` 生效;系统默认 Java 25 会被 Gradle 8.10.2 拒绝 |
+| Android SDK | `~/Android/Sdk` | 经 cmdline-tools + sdkmanager 安装:platforms/android-35、build-tools/34.0.0 与 35.0.0、platform-tools、ndk/29.0.14206865;licenses 已接受;仓库 `local.properties`(gitignored)指向它 |
 | Gradle 代理 | `~/.gradle/gradle.properties` | systemProp 指向 `127.0.0.1:7890`;Gradle 不读 http_proxy 环境变量 |
-| Go(编译 core) | `~/go-toolchains/go1.26-patched` | MetaCubeX go1.26 构建 + 仓库 `.github/patch/` 的两个补丁(补 Android 32 位运行时);编译 core 前置于 PATH |
-| 子模块 | `core/src/foss/golang/clash` | mihomo Alpha 分支;新 clone 后先 `git submodule update --init --recursive` |
+| Gradle 镜像 | `~/.gradle/init.gradle` | 把 mavenCentral/google/gradlePluginPortal 重写到阿里云镜像,并为所有项目注入 mavenLocal;`~/.m2` 里已手动装入 kaidl 1.15(pom+jar)与 kaidl-runtime 1.15(pom+aar),因其仅发布在 raw.githubusercontent,直连不稳定 |
+| Go(编译 core) | `~/go-toolchains/go1.26-patched` | MetaCubeX go1.26.10 预构建(`gh release view build --repo MetaCubeX/go` 取 `go1.26.windows-amd64.zip`)+ 仓库 `.github/patch/` 两个补丁(解压后 cd 进目录 `patch -p1` 应用);编译 core 前 `export PATH="$HOME/go-toolchains/go1.26-patched/bin:$PATH"`,**并必须 `export GOPROXY=https://goproxy.cn,direct`**(Go 不读 Gradle 代理,`proxy.golang.org` 直连不通,2026-11-04 实测踩坑) |
+| 子模块 | `core/src/foss/golang/clash` | mihomo Alpha 分支;新 clone 后先 `git submodule update --init --recursive`(2026-11-09 实测已 init,可直接打包) |
 
-- 国内镜像更快:Android SDK 组件(NDK/platform/build-tools)从 `https://mirrors.cloud.tencent.com/AndroidSDK/` 直连下载;GitHub 类资源(Gradle 发行包、Go 构建、geo 文件)走代理。
-- 项目没有单元测试,验证门不含 test 任务。
+- 下载通道实测(2026-11-04):dl.google.com 直连与走代理均可用(本机网络对 GitHub/gradle.org 直连有间歇性 TLS 干扰,凡 GitHub/Gradle 类资源一律走代理);腾讯镜像 `mirrors.cloud.tencent.com/AndroidSDK/` 是 Nexus 仓库、目录不可列表,未验证,不作为首选。
+- 单元测试只覆盖 common 模块的同步核心与编解码(`./gradlew :common:testAlphaDebugUnitTest`);验证门默认仍不含 test 任务。
 
 ## 完整打包(慢,仅需要产物时执行)
 
@@ -91,7 +92,7 @@ ClashMetaForAndroid(CMFA)——Clash.Meta 内核的 Android 代理客户端。�
 
 | 功能 | 一句话说明 | 关键文件/入口 | 引入提交 |
 | ---- | ---------- | -------------- | -------- |
-| WebDAV 订阅双向同步 | 与 clash-verge-rev 经同一 WebDAV 双向同步订阅:并集合并、删除传播、冲突弹窗、云端历史管理;HTTP 传输走 Go 内核(绕坚果云 TLS 指纹拦截,见 docs/adr/0002) | 设置→同步(service/sync、common/sync、service/webdav、core webdav 桥) | feat/webdav-sync(c6d35833) |
+| WebDAV 订阅同步(含同步方向) | 与 clash-verge-rev 经同一 WebDAV 同步订阅:默认双向并集合并(删除传播、冲突弹窗、云端历史管理),另有四个单向模式(云端→本机/本机→云端 × 覆盖/只增),变更执行前列删除与覆盖清单确认;HTTP 传输走 Go 内核(绕坚果云 TLS 指纹拦截,见 docs/adr/0002) | 设置→同步(service/sync、common/sync、service/webdav、core webdav 桥) | feat/webdav-sync(c6d35833)、feat/sync-direction(6fe118c) |
 
 `README.md` 顶部的 `vibe-feature-registry` 标记块是本表给人看的镜像:登记/移除功能时,同一个动作里同步更新本表和该标记块,防止两处漂移。
 

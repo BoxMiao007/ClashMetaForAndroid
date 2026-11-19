@@ -8,7 +8,7 @@
 
 | 功能 | 一句话说明 | 关键文件/入口 | 引入提交 |
 | ---- | ---------- | -------------- | -------- |
-| WebDAV 订阅双向同步 | 与 [clash-verge-rev](https://github.com/clash-verge-rev/clash-verge-rev) 经同一 WebDAV 双向同步订阅:并集合并、删除传播、冲突弹窗、云端历史管理;HTTP 传输走 Go 内核(绕坚果云 TLS 指纹拦截) | 设置→同步(service/sync、common/sync、service/webdav、core webdav 桥) | feat/webdav-sync(c6d35833) |
+| WebDAV 订阅同步(含同步方向) | 与 [clash-verge-rev](https://github.com/clash-verge-rev/clash-verge-rev) 经同一 WebDAV 同步订阅:默认双向并集合并(删除传播、冲突弹窗、云端历史管理),另有四个单向模式(云端→本机/本机→云端 × 覆盖/只增),变更执行前列删除与覆盖清单确认;HTTP 传输走 Go 内核(绕坚果云 TLS 指纹拦截) | 设置→同步(service/sync、common/sync、service/webdav、core webdav 桥) | feat/webdav-sync(c6d35833)、feat/sync-direction(6fe118c) |
 <!-- vibe-feature-registry:end -->
 
 ## Clash Meta for Android

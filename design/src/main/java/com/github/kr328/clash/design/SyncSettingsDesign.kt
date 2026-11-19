@@ -2,8 +2,10 @@ package com.github.kr328.clash.design
 
 import android.content.Context
 import android.view.View
+import com.github.kr328.clash.common.sync.SyncMode
 import com.github.kr328.clash.design.databinding.DesignSettingsCommonBinding
 import com.github.kr328.clash.design.dialog.requestModelTextInput
+import com.github.kr328.clash.design.dialog.requestSyncConfirmChanges
 import com.github.kr328.clash.design.preference.ClickablePreference
 import com.github.kr328.clash.design.preference.NullableTextAdapter
 import com.github.kr328.clash.design.preference.OnChangedListener
@@ -33,7 +35,7 @@ class SyncSettingsDesign(
     private val store: SyncStore,
 ) : Design<SyncSettingsDesign.Request>(context) {
     enum class Request {
-        StartSync, AutoSyncChanged, CustomInterval, OpenCloudHistory
+        StartSync, AutoSyncChanged, CustomInterval, OpenCloudHistory, ModeChanged
     }
 
     private val binding = DesignSettingsCommonBinding
@@ -45,6 +47,7 @@ class SyncSettingsDesign(
     private lateinit var syncAction: ClickablePreference
     private lateinit var resultTips: TipsPreference
     private lateinit var intervalAction: SelectableListPreference<Int>
+    private lateinit var modeTips: TipsPreference
 
     // 「自定义」间隔入口被点中时置位,listener 里据此弹输入框而不是直接重排
     private var pendingCustomInterval = false
@@ -95,6 +98,18 @@ class SyncSettingsDesign(
             )
 
             category(R.string.sync)
+
+            // 同步方向:手动与自动同步都按它执行;选中后只刷新下方说明文字
+            selectableList(
+                value = store::syncMode,
+                values = MODE_VALUES,
+                valuesText = MODE_TEXT,
+                title = R.string.sync_mode,
+            ) {
+                listener = OnChangedListener { requests.trySend(Request.ModeChanged) }
+            }
+
+            modeTips = tips(text = R.string.sync_mode_tips_bidirectional)
 
             syncAction = clickable(
                 title = R.string.sync_now,
@@ -164,6 +179,8 @@ class SyncSettingsDesign(
                 intervalAction.enabled = withContext(Dispatchers.IO) {
                     store.periodicSyncEnabled
                 }
+
+                refreshModeTips()
             }
         }
 
@@ -233,25 +250,33 @@ class SyncSettingsDesign(
         return true
     }
 
-    /** 删除确认弹窗:返回 false(含取消/关闭)表示放弃本轮。 */
-    suspend fun requestDeleteConfirm(message: CharSequence): Boolean {
-        return suspendCancellableCoroutine { ctx ->
-            val dialog = MaterialAlertDialogBuilder(context)
-                .setTitle(R.string.sync_delete_confirm_title)
-                .setMessage(message)
-                .setPositiveButton(R.string.ok) { _, _ -> ctx.resume(true) }
-                .setNegativeButton(R.string.cancel) { _, _ -> }
-                .show()
+    /** 删除/覆盖确认弹窗:返回 false(含取消/关闭)表示放弃本轮。 */
+    suspend fun requestConfirmChanges(message: CharSequence): Boolean {
+        return context.requestSyncConfirmChanges(message)
+    }
 
-            dialog.setOnDismissListener {
-                if (!ctx.isCompleted)
-                    ctx.resume(false)
-            }
+    /**
+     * 按当前方向刷新说明文字。读取跨进程偏好走 IO,避免在主线程做 IPC。
+     */
+    suspend fun refreshModeTips() {
+        applyModeTips(withContext(Dispatchers.IO) { store.syncMode })
+    }
 
-            ctx.invokeOnCancellation {
-                dialog.dismiss()
+    private fun applyModeTips(mode: SyncMode) {
+        val description = context.getString(
+            when (mode) {
+                SyncMode.BIDIRECTIONAL -> R.string.sync_mode_tips_bidirectional
+                SyncMode.CLOUD_TO_LOCAL_MIRROR -> R.string.sync_mode_tips_cloud_to_local_mirror
+                SyncMode.CLOUD_TO_LOCAL_ADD -> R.string.sync_mode_tips_cloud_to_local_add
+                SyncMode.LOCAL_TO_CLOUD_MIRROR -> R.string.sync_mode_tips_local_to_cloud_mirror
+                SyncMode.LOCAL_TO_CLOUD_ADD -> R.string.sync_mode_tips_local_to_cloud_add
             }
-        }
+        )
+        val warning = if (mode.deletesCounterpart)
+            "\n" + context.getString(R.string.sync_mode_tips_mirror_warning)
+        else ""
+
+        modeTips.text = description + warning
     }
 
     private companion object {
@@ -265,6 +290,16 @@ class SyncSettingsDesign(
                 return text?.trim() ?: ""
             }
         }
+
+        // 同步方向:枚举顺序即下拉顺序,文案与 [SyncMode] 一一对应
+        val MODE_VALUES: Array<SyncMode> = SyncMode.entries.toTypedArray()
+        val MODE_TEXT = arrayOf(
+            R.string.sync_mode_bidirectional,
+            R.string.sync_mode_cloud_to_local_mirror,
+            R.string.sync_mode_cloud_to_local_add,
+            R.string.sync_mode_local_to_cloud_mirror,
+            R.string.sync_mode_local_to_cloud_add,
+        )
 
         // 定时间隔预设(分钟);0 是「自定义」入口的哨兵值,不落库
         val INTERVAL_PRESETS = arrayOf(30, 60, 360, 720, 1440)

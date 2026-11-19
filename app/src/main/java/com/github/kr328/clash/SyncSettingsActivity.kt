@@ -3,14 +3,18 @@ package com.github.kr328.clash
 import com.github.kr328.clash.common.util.intent
 import com.github.kr328.clash.design.R
 import com.github.kr328.clash.design.SyncSettingsDesign
+import com.github.kr328.clash.design.dialog.syncChangeMessage
+import com.github.kr328.clash.design.dialog.syncModeLabelRes
+import com.github.kr328.clash.design.dialog.syncOutcomeText
 import com.github.kr328.clash.service.remote.SyncChoice
-import com.github.kr328.clash.service.remote.SyncConflict
 import com.github.kr328.clash.service.remote.SyncOutcome
 import com.github.kr328.clash.service.sync.SyncReceiver
 import com.github.kr328.clash.service.sync.SyncStore
 import com.github.kr328.clash.util.withSync
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -37,6 +41,9 @@ class SyncSettingsActivity : BaseActivity<SyncSettingsDesign>() {
                         SyncSettingsDesign.Request.CustomInterval ->
                             if (design.requestCustomInterval())
                                 SyncReceiver.schedule(this@SyncSettingsActivity)
+
+                        SyncSettingsDesign.Request.ModeChanged ->
+                            design.refreshModeTips()
 
                         SyncSettingsDesign.Request.OpenCloudHistory ->
                             startActivity(CloudBackupHistoryActivity::class.intent)
@@ -74,15 +81,28 @@ class SyncSettingsActivity : BaseActivity<SyncSettingsDesign>() {
 
                         outcome = withSync { resolve(choices) }
                     }
-                    SyncOutcome.PHASE_CONFIRM_DELETIONS -> {
-                        if (!design.requestDeleteConfirm(deleteMessage(outcome))) break@loop
+                    SyncOutcome.PHASE_CONFIRM_CHANGES -> {
+                        if (!design.requestConfirmChanges(syncChangeMessage(this@SyncSettingsActivity, outcome)))
+                            break@loop
 
                         outcome = withSync { resolve(emptyList()) }
                     }
                 }
             }
 
-            design.showResult(resultText(outcome))
+            if (outcome.phase == SyncOutcome.PHASE_DONE) {
+                val mode = withContext(Dispatchers.IO) { SyncStore(this@SyncSettingsActivity).syncMode }
+
+                design.showResult(
+                    syncOutcomeText(
+                        this,
+                        outcome,
+                        modeLabel = getString(syncModeLabelRes(mode)),
+                    )
+                )
+            } else {
+                design.showResult(getText(R.string.sync_cancelled))
+            }
         } catch (e: Exception) {
             design.showResult(e.message ?: e.toString())
         } finally {
@@ -90,26 +110,6 @@ class SyncSettingsActivity : BaseActivity<SyncSettingsDesign>() {
         }
     }
 
-    private fun resultText(outcome: SyncOutcome): CharSequence = when {
-        outcome.phase != SyncOutcome.PHASE_DONE -> getText(R.string.sync_cancelled)
-
-        !outcome.succeeded -> getString(R.string.sync_failed, outcome.message ?: "")
-
-        outcome.imported.isEmpty() && outcome.pushed.isEmpty() &&
-            outcome.deletedLocal.isEmpty() && outcome.deletedCloud.isEmpty() ->
-            getText(R.string.sync_done_no_changes)
-
-        else -> listOfNotNull(
-            outcome.imported.takeIf { it.isNotEmpty() }
-                ?.let { getString(R.string.sync_result_imported, it.joinToString(", ")) },
-            outcome.pushed.takeIf { it.isNotEmpty() }
-                ?.let { getString(R.string.sync_result_pushed, it.joinToString(", ")) },
-            outcome.deletedLocal.takeIf { it.isNotEmpty() }
-                ?.let { getString(R.string.sync_result_deleted_local, it.joinToString(", ")) },
-            outcome.deletedCloud.takeIf { it.isNotEmpty() }
-                ?.let { getString(R.string.sync_result_deleted_cloud, it.joinToString(", ")) },
-        ).joinToString("\n")
-    }
 
     private fun conflictSummary(name: String?, updatedAt: Long?): CharSequence {
         val time = updatedAt?.takeIf { it > 0 }?.let {
@@ -119,15 +119,4 @@ class SyncSettingsActivity : BaseActivity<SyncSettingsDesign>() {
         return listOfNotNull(name, time).joinToString(" · ").ifEmpty { "—" }
     }
 
-    private fun deleteMessage(outcome: SyncOutcome): CharSequence {
-        val sections = mutableListOf<CharSequence>()
-
-        if (outcome.deletedLocal.isNotEmpty())
-            sections += getString(R.string.sync_delete_section_local, outcome.deletedLocal.joinToString(", "))
-
-        if (outcome.deletedCloud.isNotEmpty())
-            sections += getString(R.string.sync_delete_section_cloud, outcome.deletedCloud.joinToString(", "))
-
-        return getString(R.string.sync_delete_confirm_message, sections.joinToString("\n"))
-    }
 }

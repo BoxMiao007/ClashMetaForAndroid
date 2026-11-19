@@ -2,6 +2,9 @@ package com.github.kr328.clash.common.sync
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -590,5 +593,285 @@ class SyncPlannerTest {
         assertEquals(9L, extra.upload)
         assertEquals(2L, extra.download)
         assertEquals("kept", extra.extraFields["unknown_extra_field"])
+    }
+
+    // ---- 同步方向(单向模式) ----
+
+    private fun planWith(
+        mode: SyncMode,
+        locals: List<LocalProfile>,
+        cloud: VergeBackup,
+        snapshot: SyncSnapshot? = null,
+        cloudBackupExists: Boolean = true,
+    ) = SyncPlanner.plan(locals, cloud, snapshot, mode, cloudBackupExists)
+
+    @Test
+    fun `覆盖-云端到本机 - 本机独有条目被删除且移出快照`() {
+        val contentA = "version: 1\\n".toByteArray()
+        val contentB = "version: 2\\n".toByteArray()
+        val keyA = urlKey("https://example.com/a")
+        val itemA = cloudRemoteItem(
+            uid = "Raaaaaaaaaaa", name = "订阅A", url = "https://example.com/a",
+            file = "Raaaaaaaaaaa.yaml", updated = 100,
+        )
+        val cloud = cloudOf(itemA, contentFiles = mapOf("Raaaaaaaaaaa.yaml" to contentA))
+        val localA = localUrl("订阅A", "https://example.com/a", contentA, updatedAt = 100)
+        val localB = localUrl("订阅B", "https://example.com/b", contentB, updatedAt = 200)
+
+        val plan = planWith(SyncMode.CLOUD_TO_LOCAL_MIRROR, listOf(localA, localB), cloud)
+
+        assertEquals(listOf(PlanAction.DeleteLocal(urlKey("https://example.com/b"), "订阅B")), plan.actions)
+        assertTrue(plan.conflicts.isEmpty())
+        assertTrue(plan.overwrites.isEmpty())
+        assertTrue(plan.needsConfirmation)
+        // 执行后本机 = 云端,快照只留云端集合
+        assertEquals(mapOf(keyA to SyncPlanner.fingerprint(contentA)), plan.newSnapshot.fingerprints)
+    }
+
+    @Test
+    fun `覆盖-云端到本机 - 同名不同内容就地覆盖并记录覆盖清单`() {
+        val contentOld = "version: 1\\n".toByteArray()
+        val contentNew = "version: 2\\n".toByteArray()
+        val key = urlKey("https://example.com/a")
+        val itemA = cloudRemoteItem(
+            uid = "Raaaaaaaaaaa", name = "订阅A", url = "https://example.com/a",
+            file = "Raaaaaaaaaaa.yaml", updated = 100,
+        )
+        val cloud = cloudOf(itemA, contentFiles = mapOf("Raaaaaaaaaaa.yaml" to contentNew))
+        val local = localUrl("订阅A", "https://example.com/a", contentOld, updatedAt = 900)
+
+        val plan = planWith(SyncMode.CLOUD_TO_LOCAL_MIRROR, listOf(local), cloud)
+
+        // 以云端为准:导入且带 existing,执行时就地改写而不是新建
+        val import = plan.actions.single() as PlanAction.Import
+        assertEquals(local, import.existing)
+        assertArrayEquals(contentNew, import.content)
+        assertEquals(listOf(Overwrite(key, "订阅A", keptLocal = false)), plan.overwrites)
+        assertTrue(plan.conflicts.isEmpty())
+        assertTrue(plan.needsConfirmation)
+        assertEquals(mapOf(key to SyncPlanner.fingerprint(contentNew)), plan.newSnapshot.fingerprints)
+    }
+
+    @Test
+    fun `只增-云端到本机 - 本机独有条目保留且快照只记两端共有`() {
+        val contentA = "version: 1\\n".toByteArray()
+        val contentB = "version: 2\\n".toByteArray()
+        val keyA = urlKey("https://example.com/a")
+        val itemA = cloudRemoteItem(
+            uid = "Raaaaaaaaaaa", name = "订阅A", url = "https://example.com/a",
+            file = "Raaaaaaaaaaa.yaml", updated = 100,
+        )
+        val cloud = cloudOf(itemA, contentFiles = mapOf("Raaaaaaaaaaa.yaml" to contentA))
+        val localA = localUrl("订阅A", "https://example.com/a", contentA, updatedAt = 100)
+        val localB = localUrl("订阅B", "https://example.com/b", contentB, updatedAt = 200)
+
+        val plan = planWith(SyncMode.CLOUD_TO_LOCAL_ADD, listOf(localA, localB), cloud)
+
+        // 只增不删:本机独有订阅保留,不产生任何动作;快照只包含两端都有的键
+        assertTrue(plan.actions.isEmpty())
+        assertTrue(plan.overwrites.isEmpty())
+        assertFalse(plan.needsConfirmation)
+        assertEquals(mapOf(keyA to SyncPlanner.fingerprint(contentA)), plan.newSnapshot.fingerprints)
+    }
+
+    @Test
+    fun `覆盖-本机到云端 - 云端独有条目删云端且增强条目保留`() {
+        val contentA = "version: 1\\n".toByteArray()
+        val contentX = "version: 9\\n".toByteArray()
+        val contentB = "version: 2\\n".toByteArray()
+        val mergeContent = "prepend-rules: []\\n".toByteArray()
+        val keyA = urlKey("https://example.com/a")
+        val itemA = cloudRemoteItem(
+            uid = "Raaaaaaaaaaa", name = "订阅A", url = "https://example.com/a",
+            file = "Raaaaaaaaaaa.yaml", updated = 100,
+        )
+        val itemX = cloudRemoteItem(
+            uid = "Rxxxxxxxxxxx", name = "云端独有", url = "https://example.com/x",
+            file = "Rxxxxxxxxxxx.yaml", updated = 150,
+        )
+        val mergeItem = VergeItem(
+            uid = "maaaaaaaaaaa", type = "merge", name = "全局扩展配置",
+            file = "maaaaaaaaaaa.yaml", desc = null, url = null, home = null, updated = null,
+            extra = null, option = null, extraFields = emptyMap(),
+        )
+        val cloud = VergeBackup(
+            current = "Raaaaaaaaaaa",
+            items = listOf(itemA, itemX, mergeItem),
+            contentFiles = linkedMapOf(
+                "Raaaaaaaaaaa.yaml" to contentA,
+                "Rxxxxxxxxxxx.yaml" to contentX,
+                "maaaaaaaaaaa.yaml" to mergeContent,
+            ),
+            extraFiles = emptyMap(),
+            extraFields = emptyMap(),
+        )
+        val localA = localUrl("订阅A", "https://example.com/a", contentA, updatedAt = 300)
+        val localB = localUrl("订阅B", "https://example.com/b", contentB, updatedAt = 400)
+
+        val plan = planWith(SyncMode.LOCAL_TO_CLOUD_MIRROR, listOf(localA, localB), cloud)
+
+        // 云端独有的可映射订阅被删;本机独有的被推送
+        assertTrue(plan.actions.contains(PlanAction.DeleteCloud(urlKey("https://example.com/x"), "云端独有")))
+        assertTrue(plan.actions.contains(PlanAction.Push(urlKey("https://example.com/b"), "订阅B", localB)))
+        assertTrue(plan.newCloudState.items.none { it.url == "https://example.com/x" })
+        // verge 增强条目及其内容原样保留
+        assertEquals(mergeItem, plan.newCloudState.items.single { it.type == "merge" })
+        assertArrayEquals(mergeContent, plan.newCloudState.contentFiles["maaaaaaaaaaa.yaml"])
+        // 快照 = 本机集合(执行后两端一致的部分)
+        assertEquals(
+            mapOf(
+                keyA to SyncPlanner.fingerprint(contentA),
+                urlKey("https://example.com/b") to SyncPlanner.fingerprint(contentB),
+            ),
+            plan.newSnapshot.fingerprints,
+        )
+    }
+
+    @Test
+    fun `只增-本机到云端 - 云端独有条目保留且内容差异记入覆盖清单`() {
+        val contentOld = "version: 1\\n".toByteArray()
+        val contentNew = "version: 2\\n".toByteArray()
+        val contentX = "version: 9\\n".toByteArray()
+        val key = urlKey("https://example.com/a")
+        val itemA = cloudRemoteItem(
+            uid = "Raaaaaaaaaaa", name = "订阅A", url = "https://example.com/a",
+            file = "Raaaaaaaaaaa.yaml", updated = 100,
+        )
+        val itemX = cloudRemoteItem(
+            uid = "Rxxxxxxxxxxx", name = "云端独有", url = "https://example.com/x",
+            file = "Rxxxxxxxxxxx.yaml", updated = 150,
+        )
+        val cloud = cloudOf(
+            itemA, itemX,
+            contentFiles = mapOf(
+                "Raaaaaaaaaaa.yaml" to contentOld,
+                "Rxxxxxxxxxxx.yaml" to contentX,
+            ),
+        )
+        val local = localUrl("订阅A", "https://example.com/a", contentNew, updatedAt = 500)
+
+        val plan = planWith(SyncMode.LOCAL_TO_CLOUD_ADD, listOf(local), cloud)
+
+        // 只推送本机这版(覆盖云端同名条目),云端独有条目不删
+        assertTrue(plan.actions.single() is PlanAction.Push)
+        assertTrue(plan.newCloudState.items.any { it.url == "https://example.com/x" })
+        assertEquals(listOf(Overwrite(key, "订阅A", keptLocal = true)), plan.overwrites)
+        assertTrue(plan.needsConfirmation)
+        assertEquals(mapOf(key to SyncPlanner.fingerprint(contentNew)), plan.newSnapshot.fingerprints)
+    }
+
+    @Test
+    fun `空来源 - 云端无备份包时云端到本机两种模式都拒绝`() {
+        val contentB = "version: 2\\n".toByteArray()
+        val localB = localUrl("订阅B", "https://example.com/b", contentB, updatedAt = 200)
+
+        for (mode in listOf(SyncMode.CLOUD_TO_LOCAL_MIRROR, SyncMode.CLOUD_TO_LOCAL_ADD)) {
+            val plan = planWith(mode, listOf(localB), cloudOf(), cloudBackupExists = false)
+
+            assertNotNull(plan.refusal)
+            assertTrue(plan.actions.isEmpty() && plan.overwrites.isEmpty())
+            // 拒绝时不动任何一端
+            assertTrue(plan.newSnapshot.fingerprints.isEmpty())
+        }
+    }
+
+    @Test
+    fun `空来源 - 云端包没有可同步订阅时云端到本机覆盖拒绝`() {
+        val mergeItem = VergeItem(
+            uid = "maaaaaaaaaaa", type = "merge", name = "全局扩展配置",
+            file = "maaaaaaaaaaa.yaml", desc = null, url = null, home = null, updated = null,
+            extra = null, option = null, extraFields = emptyMap(),
+        )
+        val contentB = "version: 2\\n".toByteArray()
+        val localB = localUrl("订阅B", "https://example.com/b", contentB, updatedAt = 200)
+
+        val plan = planWith(
+            SyncMode.CLOUD_TO_LOCAL_MIRROR,
+            listOf(localB),
+            cloudOf(mergeItem, contentFiles = mapOf("maaaaaaaaaaa.yaml" to "x".toByteArray())),
+        )
+
+        assertNotNull(plan.refusal)
+        assertTrue(plan.actions.isEmpty())
+    }
+
+    @Test
+    fun `空来源 - 本机无订阅时本机到云端覆盖拒绝而只增可执行`() {
+        val mergeItem = VergeItem(
+            uid = "maaaaaaaaaaa", type = "merge", name = "全局扩展配置",
+            file = "maaaaaaaaaaa.yaml", desc = null, url = null, home = null, updated = null,
+            extra = null, option = null, extraFields = emptyMap(),
+        )
+        val cloud = cloudOf(mergeItem, contentFiles = mapOf("maaaaaaaaaaa.yaml" to "x".toByteArray()))
+
+        val mirror = planWith(SyncMode.LOCAL_TO_CLOUD_MIRROR, emptyList(), cloud)
+        assertNotNull(mirror.refusal)
+        assertTrue(mirror.actions.isEmpty())
+
+        val add = planWith(SyncMode.LOCAL_TO_CLOUD_ADD, emptyList(), cloud)
+        assertNull(add.refusal)
+        assertTrue(add.actions.isEmpty())
+    }
+
+    @Test
+    fun `快照 - 单向同步成功后切回双向不产生删除`() {
+        val contentA = "version: 1\\n".toByteArray()
+        val contentB = "version: 2\\n".toByteArray()
+        val itemA = cloudRemoteItem(
+            uid = "Raaaaaaaaaaa", name = "订阅A", url = "https://example.com/a",
+            file = "Raaaaaaaaaaa.yaml", updated = 100,
+        )
+        val cloud = cloudOf(itemA, contentFiles = mapOf("Raaaaaaaaaaa.yaml" to contentA))
+        val localA = localUrl("订阅A", "https://example.com/a", contentA, updatedAt = 100)
+        val localB = localUrl("订阅B", "https://example.com/b", contentB, updatedAt = 200)
+
+        // 先做一轮「云端→本机(只增)」,拿到它写出的快照基线
+        val addPlan = planWith(SyncMode.CLOUD_TO_LOCAL_ADD, listOf(localA, localB), cloud)
+        val baseline = addPlan.newSnapshot
+
+        // 切回双向:本机独有订阅应被当成新增推送,而不是删除
+        val bidirectional = SyncPlanner.plan(listOf(localA, localB), cloud, baseline)
+
+        assertTrue(bidirectional.actions.single() is PlanAction.Push)
+        assertTrue(bidirectional.actions.none { it is PlanAction.DeleteLocal || it is PlanAction.DeleteCloud })
+    }
+
+    @Test
+    fun `冲突 - 单向模式以来源端为准不产生冲突`() {
+        val contentBase = "version: 1\\n".toByteArray()
+        val contentCloud = "version: 2\\n".toByteArray()
+        val contentLocal = "version: 3\\n".toByteArray()
+        val key = urlKey("https://example.com/a")
+        val itemA = cloudRemoteItem(
+            uid = "Raaaaaaaaaaa", name = "订阅A", url = "https://example.com/a",
+            file = "Raaaaaaaaaaa.yaml", updated = 200,
+        )
+        val cloud = cloudOf(itemA, contentFiles = mapOf("Raaaaaaaaaaa.yaml" to contentCloud))
+        val local = localUrl("订阅A", "https://example.com/a", contentLocal, updatedAt = 300)
+        val snapshot = snapshotOf(key to SyncPlanner.fingerprint(contentBase))
+
+        // 双向下这是冲突;单向(云端为准)直接覆盖,无冲突、有覆盖清单
+        val plan = planWith(SyncMode.CLOUD_TO_LOCAL_MIRROR, listOf(local), cloud, snapshot)
+
+        assertTrue(plan.conflicts.isEmpty())
+        assertEquals(listOf(Overwrite(key, "订阅A", keptLocal = false)), plan.overwrites)
+    }
+
+    @Test
+    fun `双向 - 导入本机已有订阅时带 existing 以便就地覆盖`() {
+        val contentOld = "version: 1\\n".toByteArray()
+        val contentNew = "version: 2\\n".toByteArray()
+        val itemA = cloudRemoteItem(
+            uid = "Raaaaaaaaaaa", name = "订阅A", url = "https://example.com/a",
+            file = "Raaaaaaaaaaa.yaml", updated = 500,
+        )
+        val cloud = cloudOf(itemA, contentFiles = mapOf("Raaaaaaaaaaa.yaml" to contentNew))
+        val local = localUrl("订阅A", "https://example.com/a", contentOld, updatedAt = 100)
+
+        val plan = SyncPlanner.plan(listOf(local), cloud, null)
+
+        val import = plan.actions.single() as PlanAction.Import
+        assertEquals(local, import.existing)
+        assertTrue(plan.overwrites.isEmpty())
     }
 }

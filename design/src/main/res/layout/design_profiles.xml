@@ -59,6 +59,18 @@
                         android:onClick="@{() -> self.requestSync()}"
                         android:padding="@dimen/toolbar_image_action_padding"
                         android:src="@drawable/ic_baseline_cloud_download" />
+
+                    <!-- 同步进行时的旋转圆弧,叠在云图标外围;不可点击,触摸穿透到 sync_view -->
+                    <ImageView
+                        android:id="@+id/sync_progress_view"
+                        android:layout_width="@dimen/item_tailing_component_size"
+                        android:layout_height="@dimen/item_tailing_component_size"
+                        android:layout_gravity="end|center_vertical"
+                        android:layout_marginStart="@dimen/item_tailing_margin"
+                        android:importantForAccessibility="no"
+                        android:padding="@dimen/toolbar_image_action_padding"
+                        android:src="@drawable/ic_sync_progress"
+                        android:visibility="gone" />
                 </FrameLayout>
 
                 <FrameLayout

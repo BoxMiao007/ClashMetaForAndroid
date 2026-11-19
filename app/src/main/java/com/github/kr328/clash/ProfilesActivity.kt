@@ -9,13 +9,16 @@ import com.github.kr328.clash.common.util.setUUID
 import com.github.kr328.clash.common.util.ticker
 import com.github.kr328.clash.design.ProfilesDesign
 import com.github.kr328.clash.design.dialog.requestSyncConflictChoice
-import com.github.kr328.clash.design.dialog.requestSyncDeleteConfirm
+import com.github.kr328.clash.design.dialog.requestSyncConfirmChanges
 import com.github.kr328.clash.design.dialog.showSyncResult
+import com.github.kr328.clash.design.dialog.syncChangeMessage
+import com.github.kr328.clash.design.dialog.syncModeLabelRes
 import com.github.kr328.clash.design.dialog.syncOutcomeText
 import com.github.kr328.clash.design.ui.ToastDuration
 import com.github.kr328.clash.service.model.Profile
 import com.github.kr328.clash.service.remote.SyncChoice
 import com.github.kr328.clash.service.remote.SyncOutcome
+import com.github.kr328.clash.service.sync.SyncStore
 import com.github.kr328.clash.util.withProfile
 import com.github.kr328.clash.util.withSync
 import kotlinx.coroutines.Dispatchers
@@ -133,20 +136,23 @@ class ProfilesActivity : BaseActivity<ProfilesDesign>() {
 
                         outcome = withSync { resolve(choices) }
                     }
-                    SyncOutcome.PHASE_CONFIRM_DELETIONS -> {
-                        if (!requestSyncDeleteConfirm(syncDeleteMessage(outcome))) break@loop
+                    SyncOutcome.PHASE_CONFIRM_CHANGES -> {
+                        if (!requestSyncConfirmChanges(syncChangeMessage(this, outcome))) break@loop
 
                         outcome = withSync { resolve(emptyList()) }
                     }
                 }
             }
 
-            showSyncResult(
-                message = if (outcome.phase == SyncOutcome.PHASE_DONE)
-                    syncOutcomeText(this, outcome)
-                else
-                    getText(R.string.sync_cancelled),
-            )
+            if (outcome.phase == SyncOutcome.PHASE_DONE) {
+                val mode = withContext(Dispatchers.IO) { SyncStore(this@ProfilesActivity).syncMode }
+
+                showSyncResult(
+                    syncOutcomeText(this, outcome, modeLabel = getString(syncModeLabelRes(mode)))
+                )
+            } else {
+                showSyncResult(getText(R.string.sync_cancelled))
+            }
         } catch (e: Exception) {
             showSyncResult(message = e.message ?: e.toString())
         } finally {
@@ -162,17 +168,6 @@ class ProfilesActivity : BaseActivity<ProfilesDesign>() {
         return listOfNotNull(name, time).joinToString(" · ").ifEmpty { "—" }
     }
 
-    private fun syncDeleteMessage(outcome: SyncOutcome): CharSequence {
-        val sections = mutableListOf<CharSequence>()
-
-        if (outcome.deletedLocal.isNotEmpty())
-            sections += getString(R.string.sync_delete_section_local, outcome.deletedLocal.joinToString(", "))
-
-        if (outcome.deletedCloud.isNotEmpty())
-            sections += getString(R.string.sync_delete_section_cloud, outcome.deletedCloud.joinToString(", "))
-
-        return getString(R.string.sync_delete_confirm_message, sections.joinToString("\n"))
-    }
 
     override fun onProfileUpdateCompleted(uuid: UUID?) {
         if(uuid == null)
